@@ -1,11 +1,67 @@
 import React, { useState, useEffect } from "react";
 import ReactDOM from 'react-dom/client';
-import './style.css';
-import { requestForToken, onMessageListener } from "./firebase";
+import './style.css'; // もしエラーが出たらこの行を消してください
+import { initializeApp } from "firebase/app";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
-// ================================
-// ここから下は元々 Main.tsx にあったコード
-// ================================
+// ==========================================
+// 1. Firebase (通知機能) の設定エリア
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyBwYqnTXHkFC-IwTp6wBNOGi19TBnYjStU",
+  authDomain: "lms-pwa-3a9f0.firebaseapp.com",
+  projectId: "lms-pwa-3a9f0",
+  storageBucket: "lms-pwa-3a9f0.firebasestorage.app",
+  messagingSenderId: "336136905814",
+  appId: "1:336136905814:web:8c89eed540bfba8de947f7",
+  measurementId: "G-TXLPESM5ZF",
+};
+
+// 安全にFirebaseを初期化する
+const app = initializeApp(firebaseConfig);
+let messaging: any = null;
+
+try {
+  if (typeof window !== "undefined") {
+    messaging = getMessaging(app);
+  }
+} catch (error) {
+  console.log("通知機能が無効です:", error);
+}
+
+// 通知許可＆トークン取得
+const requestForToken = async () => {
+  if (!messaging) return null;
+  try {
+    const currentToken = await getToken(messaging, {
+      vapidKey: "BCyRh6AUsUP01FUl-UO27y8LDkbEXsnf-tgQUYISQIHo4YCY8RZ5wBfE0KbSiokAitEfauyDwYoNKwvnanythNI",
+    });
+    if (currentToken) {
+      console.log("Token:", currentToken);
+      return currentToken;
+    } else {
+      console.log("No token.");
+      return null;
+    }
+  } catch (err) {
+    console.log("Token error:", err);
+    return null;
+  }
+};
+
+// 通知受信リスナー
+const onMessageListener = () =>
+  new Promise((resolve) => {
+    if (messaging) {
+      onMessage(messaging, (payload) => {
+        resolve(payload);
+      });
+    }
+  });
+
+// ==========================================
+// 2. アプリ本体のデータとロジック
+// ==========================================
 
 const GRADE_CURRICULUM: any = {
   中1: {
@@ -85,7 +141,7 @@ const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => 
   );
 };
 
-// コンポーネント名を App に戻しました（安全のため）
+// メインアプリコンポーネント
 function App() {
   const [students, setStudents] = useState(() => {
     const saved = localStorage.getItem("lms_v20_data");
@@ -273,7 +329,7 @@ function App() {
             <h2 className="text-2xl font-black italic text-slate-300 tracking-tighter">{role === "teacher" ? "TEACHER'S CONSOLE" : "MY DASHBOARD"}</h2>
             <button onClick={() => setLoggedIn(false)} className="px-6 py-2 text-xs font-bold text-slate-400 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">LOGOUT</button>
           </header>
-          {/* ...省略部分もそのまま全部含めました... */}
+
           <div className="grid lg:grid-cols-12 gap-8">
             <div className="lg:col-span-4 space-y-6">
               {role === "teacher" ? (
@@ -352,8 +408,6 @@ function App() {
                       <button key={tab.k} onClick={() => setCurrentView(tab.k as any)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all ${currentView === tab.k ? "bg-white text-slate-800 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>{tab.l}</button>
                     ))}
                   </div>
-                  {/* ... (残りのJSXも全て含んでいます) ... */}
-                  {/* 省略していますが、コピーする際は全部入っています */}
                   {currentView === "calendar" && (
                     <div className="grid md:grid-cols-2 gap-10 animate-in fade-in">
                       <div>
@@ -385,6 +439,7 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {/* ...残りのJSXもすべて含まれています... */}
                   {currentView === "test" && (
                     <div className="animate-in fade-in">
                       <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100 mb-8">
@@ -499,6 +554,10 @@ function App() {
     </div>
   );
 }
+
+// ==========================================
+// 3. アプリの起動（レンダリング）
+// ==========================================
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
