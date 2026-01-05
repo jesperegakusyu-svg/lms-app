@@ -76,7 +76,34 @@ const GRADE_CURRICULUM: any = {
     社会: [{ unit: "公民：現代社会", progress: 0 }, { unit: "歴史：近現代", progress: 0 }],
     国語: [{ unit: "現代文", progress: 0 }, { unit: "古文・漢文", progress: 0 }]
   },
-  // 必要に応じて高校生用も追加可能
+  // ★高校生の科目を復活させました！
+  高1: {
+    数学Ⅰ: [{ unit: "数と式", progress: 0 }, { unit: "二次関数", progress: 0 }, { unit: "図形と計量", progress: 0 }, { unit: "データの分析", progress: 0 }],
+    数学A: [{ unit: "場合の数と確率", progress: 0 }, { unit: "図形の性質", progress: 0 }, { unit: "整数の性質", progress: 0 }],
+    英語: [{ unit: "文型・時制", progress: 0 }, { unit: "助動詞", progress: 0 }, { unit: "不定詞・動名詞", progress: 0 }, { unit: "分詞・関係詞", progress: 0 }],
+    化学基礎: [{ unit: "物質の構成", progress: 0 }, { unit: "物質の変化", progress: 0 }],
+    生物基礎: [{ unit: "生物と遺伝子", progress: 0 }, { unit: "生物の体内環境", progress: 0 }],
+    物理基礎: [{ unit: "物体の運動", progress: 0 }, { unit: "エネルギー", progress: 0 }],
+    地学基礎: [{ unit: "地球の構造", progress: 0 }, { unit: "宇宙", progress: 0 }]
+  },
+  高2: {
+    数学Ⅱ: [{ unit: "式と証明", progress: 0 }, { unit: "複素数", progress: 0 }, { unit: "図形と方程式", progress: 0 }, { unit: "三角関数", progress: 0 }, { unit: "指数・対数", progress: 0 }, { unit: "微積分", progress: 0 }],
+    数学B: [{ unit: "数列", progress: 0 }, { unit: "統計", progress: 0 }],
+    英語: [{ unit: "比較・仮定法", progress: 0 }, { unit: "否定・倒置", progress: 0 }],
+    物理: [{ unit: "力学", progress: 0 }, { unit: "電磁気", progress: 0 }],
+    化学: [{ unit: "物質の状態", progress: 0 }, { unit: "無機物質", progress: 0 }, { unit: "有機化合物", progress: 0 }],
+    生物: [{ unit: "細胞と分子", progress: 0 }, { unit: "代謝", progress: 0 }, { unit: "遺伝", progress: 0 }],
+    地学: [{ unit: "地球内部", progress: 0 }, { unit: "地層", progress: 0 }]
+  },
+  高3: {
+    数学Ⅲ: [{ unit: "極限", progress: 0 }, { unit: "微積分", progress: 0 }],
+    数学C: [{ unit: "ベクトル", progress: 0 }, { unit: "複素数平面", progress: 0 }],
+    英語: [{ unit: "長文読解", progress: 0 }, { unit: "英作文", progress: 0 }],
+    物理: [{ unit: "原子", progress: 0 }],
+    化学: [{ unit: "高分子", progress: 0 }],
+    生物: [{ unit: "生態系", progress: 0 }, { unit: "進化", progress: 0 }],
+    地学: [{ unit: "宇宙の構造", progress: 0 }]
+  }
 };
 
 const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => {
@@ -328,6 +355,61 @@ function App() {
     alert("保存しました");
   };
 
+  const handleHomeworkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && currentStudentId) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const updated = { ...students };
+        if (!updated[currentStudentId].homeworks) updated[currentStudentId].homeworks = [];
+        updated[currentStudentId].homeworks.push({ img: reader.result, date: new Date().toLocaleDateString(), timestamp: new Date().toLocaleTimeString() });
+        setStudents(updated);
+        alert("提出しました");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const addMaterial = () => {
+    if (!matTitle || !matUrl) return;
+    const updated = { ...students };
+    if (!updated[currentStudentId!].materials) updated[currentStudentId!].materials = [];
+    updated[currentStudentId!].materials.push({ title: matTitle, url: matUrl, date: new Date().toLocaleDateString(), by: role });
+    setStudents(updated);
+    setMatTitle(""); setMatUrl("");
+  };
+
+  const createTest = () => {
+    if(!testTitle) return;
+    const updated = { ...students };
+    if (!updated[currentStudentId!].tests) updated[currentStudentId!].tests = [];
+    const initialScores: any = {};
+    Object.keys(currentStudent.subjects).forEach(s => initialScores[s] = { result: 0 });
+    updated[currentStudentId!].tests.push({ title: testTitle, scores: initialScores, date: new Date().toLocaleDateString(), status: "draft" });
+    setStudents(updated);
+    setTestTitle("");
+  };
+
+  const updateTestScore = (testIdx: number, subj: string, val: number) => {
+    const updated = { ...students };
+    updated[currentStudentId!].tests[testIdx].scores[subj].result = val;
+    setStudents(updated);
+  };
+
+  const changeTestStatus = (testIdx: number, status: "pending" | "approved" | "draft") => {
+    if(status === "approved" && !window.confirm("確定すると修正できなくなります。よろしいですか？")) return;
+    const updated = { ...students };
+    updated[currentStudentId!].tests[testIdx].status = status;
+    setStudents(updated);
+  };
+
+  const updateMeetingUrl = (url: string) => {
+    if(!currentStudentId) return;
+    const updated = { ...students };
+    updated[currentStudentId].meetingUrl = url;
+    setStudents(updated);
+  };
+
   const currentStudent = currentStudentId ? students[currentStudentId] : null;
 
   return (
@@ -435,7 +517,7 @@ function App() {
                       {/* 科目選択 (チェックボックス) */}
                       <div className="bg-slate-50 p-4 rounded-2xl">
                          <p className="text-[10px] font-bold text-slate-400 mb-2">受講科目を選択</p>
-                         <div className="grid grid-cols-2 gap-2">
+                         <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto">
                            {GRADE_CURRICULUM[newStudentGrade] && Object.keys(GRADE_CURRICULUM[newStudentGrade]).map(subj => (
                              <label key={subj} className="flex items-center gap-2 text-xs font-bold cursor-pointer">
                                <input type="checkbox" checked={newStudentSubjects.includes(subj)} 
@@ -543,7 +625,7 @@ function App() {
                     ))}
                   </div>
 
-                  {/* 各ビューの表示（内容は前回とほぼ同じ） */}
+                  {/* 各ビューの表示 */}
                   {currentView === "calendar" && (
                     <div className="grid md:grid-cols-2 gap-10 animate-in fade-in">
                       <div>
