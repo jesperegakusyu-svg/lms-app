@@ -76,7 +76,6 @@ const GRADE_CURRICULUM: any = {
     社会: [{ unit: "公民：現代社会", progress: 0 }, { unit: "歴史：近現代", progress: 0 }],
     国語: [{ unit: "現代文", progress: 0 }, { unit: "古文・漢文", progress: 0 }]
   },
-  // ★高校生の科目を復活させました！
   高1: {
     数学Ⅰ: [{ unit: "数と式", progress: 0 }, { unit: "二次関数", progress: 0 }, { unit: "図形と計量", progress: 0 }, { unit: "データの分析", progress: 0 }],
     数学A: [{ unit: "場合の数と確率", progress: 0 }, { unit: "図形の性質", progress: 0 }, { unit: "整数の性質", progress: 0 }],
@@ -156,6 +155,11 @@ function App() {
   const [inputId, setInputId] = useState("");
   const [inputPass, setInputPass] = useState("");
   
+  // パスワードリセット用
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [resetId, setResetId] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+
   // ログイン中ユーザー情報
   const [currentStudentId, setCurrentStudentId] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
@@ -163,8 +167,9 @@ function App() {
 
   // 初回ログインセットアップ用
   const [isFirstLoginSetup, setIsFirstLoginSetup] = useState(false);
+  // ★Emailを追加
   const [setupData, setSetupData] = useState({
-    newPass: "", lastName: "", firstName: "", gender: "未回答",
+    newPass: "", lastName: "", firstName: "", email: "", gender: "未回答",
     address: "", schoolPref: "", schoolName: "", schoolGrade: ""
   });
 
@@ -246,8 +251,9 @@ function App() {
 
   // 初回セットアップ完了処理
   const handleFirstLoginSetup = () => {
-    const { newPass, lastName, firstName, gender, address, schoolPref, schoolName, schoolGrade } = setupData;
-    if (!newPass || !lastName || !firstName || !address || !schoolName) {
+    const { newPass, lastName, firstName, email, gender, address, schoolPref, schoolName, schoolGrade } = setupData;
+    // ★Emailも必須チェックに追加
+    if (!newPass || !lastName || !firstName || !email || !address || !schoolName) {
       return alert("すべての必須項目を入力してください");
     }
     
@@ -256,15 +262,31 @@ function App() {
     
     // 情報を更新
     s.password = newPass;
-    s.name = `${lastName} ${firstName}`; // 表示名はフルネームに
-    s.profile = { lastName, firstName, gender, address, schoolPref, schoolName, schoolGrade };
-    s.isFirstLogin = false; // 初回フラグを下ろす
+    s.name = `${lastName} ${firstName}`; 
+    // ★Emailを保存
+    s.profile = { lastName, firstName, email, gender, address, schoolPref, schoolName, schoolGrade };
+    s.isFirstLogin = false; 
     
     setStudents(updated);
     setIsFirstLoginSetup(false);
     setLoggedIn(true);
     setSubject(Object.keys(s.subjects)[0] || "");
     alert("セットアップが完了しました！");
+  };
+
+  // パスワードリセット処理（擬似メール送信）
+  const handleResetPassword = () => {
+    const s = students[resetId];
+    if (s && s.profile && s.profile.email === resetEmail) {
+      // 本来はここでサーバーサイドAPIを叩いてメールを送る
+      // 今回はデモとしてアラートで表示する（開発用）
+      alert(`【メール送信完了】\n${resetEmail} 宛にパスワードリセットメールを送信しました。\n\n(※開発用表示: パスワードは「${s.password}」です)`);
+      setIsForgotPassword(false);
+      setResetId("");
+      setResetEmail("");
+    } else {
+      alert("IDとメールアドレスが一致するユーザーが見つかりません。\n(※初回セットアップでメールアドレスを登録していない場合は利用できません)");
+    }
   };
 
   const handleNotificationSetup = async () => {
@@ -294,7 +316,7 @@ function App() {
       password: pass, 
       grade: newStudentGrade, 
       subjects: selectedSubjectsData, 
-      isFirstLogin: true, // ★初回ログインフラグON
+      isFirstLogin: true, 
       tests: [], mocks: [], records: [], homeworks: [], materials: [], meetingUrl: "",
       profile: {} // 空のプロフィール
     };
@@ -312,25 +334,22 @@ function App() {
     const s = updated[currentStudentId];
 
     if (s.subjects[subjName]) {
-      // 削除する場合（確認を入れる）
       if (window.confirm(`${subjName} を削除しますか？\nこれまでの進捗データも消えます。`)) {
         delete s.subjects[subjName];
       }
     } else {
-      // 追加する場合
-      const grade = s.grade || "中1"; // 生徒の学年に合わせる（なければ中1）
+      const grade = s.grade || "中1"; 
       const curriculum = GRADE_CURRICULUM[grade]?.[subjName];
       if (curriculum) {
         s.subjects[subjName] = JSON.parse(JSON.stringify(curriculum));
       } else {
-        // カリキュラムがない場合（高校生科目など）は空で作成
         s.subjects[subjName] = [{ unit: "自由学習", progress: 0 }];
       }
     }
     setStudents(updated);
   };
 
-  // カレンダー等のヘルパー関数
+  // 汎用保存関数
   const getCalendarDays = () => {
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
@@ -342,7 +361,6 @@ function App() {
     return days;
   };
 
-  // 汎用保存関数
   const saveRecord = (type: "advice" | "question") => {
     if (!currentStudentId) return;
     const text = type === "advice" ? adviceText : studentComment;
@@ -428,6 +446,11 @@ function App() {
                 <input className="w-full bg-white p-3 rounded-xl font-bold outline-none border-2 border-rose-100 focus:border-rose-400" type="password" placeholder="忘れないパスワードを設定" value={setupData.newPass} onChange={e => setSetupData({...setupData, newPass: e.target.value})} />
               </div>
 
+              <div className="bg-slate-50 p-4 rounded-2xl mb-6">
+                <label className="text-[10px] font-black text-slate-400 block mb-1">メールアドレス (パスワード復旧用)</label>
+                <input className="w-full bg-white p-3 rounded-xl font-bold outline-none border-2 border-slate-100 focus:border-slate-400" type="email" placeholder="example@email.com" value={setupData.email} onChange={e => setSetupData({...setupData, email: e.target.value})} />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-black text-slate-400 ml-2">姓 (Last Name)</label>
@@ -476,6 +499,23 @@ function App() {
         </div>
       )}
 
+      {/* --- パスワード忘れモーダル --- */}
+      {isForgotPassword && (
+        <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4">
+           <div className="bg-white p-8 rounded-[2rem] w-full max-w-sm shadow-2xl relative animate-in fade-in zoom-in duration-300">
+             <button onClick={() => setIsForgotPassword(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold">✕ 閉じる</button>
+             <h3 className="text-xl font-black text-slate-800 mb-4 text-center">パスワード再発行</h3>
+             <p className="text-xs text-slate-500 mb-6 text-center">登録時のIDとメールアドレスを入力してください。<br/>一致した場合、メールでパスワードを送信します。</p>
+             
+             <div className="space-y-4">
+               <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" placeholder="ID (例: 260001)" value={resetId} onChange={e => setResetId(e.target.value)} />
+               <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" type="email" placeholder="メールアドレス" value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
+               <button onClick={handleResetPassword} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black shadow-lg">メールを送信</button>
+             </div>
+           </div>
+        </div>
+      )}
+
       {/* --- ログイン画面 --- */}
       {!loggedIn ? (
         <div className={`fixed inset-0 flex items-center justify-center ${role === "student" ? "bg-blue-50" : "bg-rose-50"}`}>
@@ -486,8 +526,15 @@ function App() {
               <button onClick={() => setRole("teacher")} className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${role === "teacher" ? "bg-white text-rose-600 shadow-sm" : "text-slate-400"}`}>TEACHER</button>
             </div>
             <input className="w-full p-4 mb-4 bg-slate-50 rounded-2xl outline-none font-bold" placeholder="ID" value={inputId} onChange={(e) => setInputId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-            <input className="w-full p-4 mb-8 bg-slate-50 rounded-2xl outline-none font-bold" type="password" placeholder="PASS" value={inputPass} onChange={(e) => setInputPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-            <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-white shadow-lg ${role === "student" ? "bg-blue-600" : "bg-rose-600"}`}>LOGIN</button>
+            <input className="w-full p-4 mb-6 bg-slate-50 rounded-2xl outline-none font-bold" type="password" placeholder="PASS" value={inputPass} onChange={(e) => setInputPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+            
+            <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-white shadow-lg mb-4 ${role === "student" ? "bg-blue-600" : "bg-rose-600"}`}>LOGIN</button>
+            
+            {role === "student" && (
+              <button onClick={() => setIsForgotPassword(true)} className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 underline">
+                パスワードを忘れた方はこちら
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -595,6 +642,7 @@ function App() {
                       <div className="flex justify-between items-start bg-slate-50 p-6 rounded-2xl border border-slate-100">
                         <div className="text-xs font-bold text-slate-600 space-y-1">
                           <p><span className="text-slate-400">氏名:</span> {currentStudent.profile?.lastName} {currentStudent.profile?.firstName} ({currentStudent.profile?.gender})</p>
+                          <p><span className="text-slate-400">Email:</span> {currentStudent.profile?.email || "未登録"}</p>
                           <p><span className="text-slate-400">住所:</span> {currentStudent.profile?.address}</p>
                           <p><span className="text-slate-400">学校:</span> {currentStudent.profile?.schoolPref} {currentStudent.profile?.schoolName} ({currentStudent.profile?.schoolGrade})</p>
                         </div>
