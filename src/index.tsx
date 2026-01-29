@@ -1,283 +1,145 @@
 import React, { useState, useEffect } from "react";
-
 import ReactDOM from 'react-dom/client';
-
 import './style.css'; 
-
 import { initializeApp } from "firebase/app";
-
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
-
-
 // ==========================================
-
 // 1. Firebase (通知機能) の設定エリア
-
 // ==========================================
-
 const firebaseConfig = {
-
   apiKey: "AIzaSyBwYqnTXHkFC-IwTp6wBNOGi19TBnYjStU",
-
   authDomain: "lms-pwa-3a9f0.firebaseapp.com",
-
   projectId: "lms-pwa-3a9f0",
-
   storageBucket: "lms-pwa-3a9f0.firebasestorage.app",
-
   messagingSenderId: "336136905814",
-
   appId: "1:336136905814:web:8c89eed540bfba8de947f7",
-
   measurementId: "G-TXLPESM5ZF",
-
 };
-
-
 
 const app = initializeApp(firebaseConfig);
-
 let messaging: any = null;
 
-
-
 try {
-
   if (typeof window !== "undefined") {
-
     messaging = getMessaging(app);
-
   }
-
 } catch (error) {
-
   console.log("通知機能が無効です:", error);
-
 }
 
-
-
 const requestForToken = async () => {
-
   if (!messaging) return null;
-
   try {
-
     const currentToken = await getToken(messaging, {
-
       vapidKey: "BCyRh6AUsUP01FUl-UO27y8LDkbEXsnf-tgQUYISQIHo4YCY8RZ5wBfE0KbSiokAitEfauyDwYoNKwvnanythNI",
-
     });
-
     return currentToken || null;
-
   } catch (err) {
-
     console.log("Token error:", err);
-
     return null;
-
   }
-
 };
-
-
 
 const onMessageListener = () =>
-
   new Promise((resolve) => {
-
     if (messaging) {
-
       onMessage(messaging, (payload) => {
-
         resolve(payload);
-
       });
-
     }
-
   });
 
-
-
 // ==========================================
-
 // 2. データ定義 & ユーティリティ
-
 // ==========================================
-
-
 
 const GRADE_CURRICULUM: any = {
-
   中1: {
-
     数学: [{ unit: "正の数・負の数", progress: 0 }, { unit: "文字と式", progress: 0 }, { unit: "方程式", progress: 0 }, { unit: "比例・反比例", progress: 0 }, { unit: "平面図形", progress: 0 }, { unit: "空間図形", progress: 0 }, { unit: "データの活用", progress: 0 }],
-
     英語: [{ unit: "be動詞", progress: 0 }, { unit: "一般動詞", progress: 0 }, { unit: "現在進行形", progress: 0 }, { unit: "助動詞can", progress: 0 }, { unit: "疑問詞", progress: 0 }],
-
     理科: [{ unit: "植物の生活と種類", progress: 0 }, { unit: "身のまわりの物質", progress: 0 }, { unit: "光・音・力", progress: 0 }, { unit: "大地の変化", progress: 0 }],
-
     社会: [{ unit: "地理：世界の姿", progress: 0 }, { unit: "歴史：古代", progress: 0 }],
-
     国語: [{ unit: "現代文", progress: 0 }, { unit: "古文", progress: 0 }]
-
   },
-
   中2: {
-
     数学: [{ unit: "式の計算", progress: 0 }, { unit: "連立方程式", progress: 0 }, { unit: "一次関数", progress: 0 }, { unit: "図形の性質", progress: 0 }, { unit: "確率", progress: 0 }],
-
     英語: [{ unit: "未来表現", progress: 0 }, { unit: "助動詞", progress: 0 }, { unit: "不定詞", progress: 0 }, { unit: "動名詞", progress: 0 }, { unit: "比較", progress: 0 }, { unit: "受け身", progress: 0 }],
-
     理科: [{ unit: "動物の生活", progress: 0 }, { unit: "化学変化", progress: 0 }, { unit: "電流", progress: 0 }, { unit: "気象", progress: 0 }],
-
     社会: [{ unit: "地理：日本の地域", progress: 0 }, { unit: "歴史：近世", progress: 0 }],
-
     国語: [{ unit: "現代文", progress: 0 }, { unit: "漢文", progress: 0 }]
-
   },
-
   中3: {
-
     数学: [{ unit: "展開・因数分解", progress: 0 }, { unit: "平方根", progress: 0 }, { unit: "二次方程式", progress: 0 }, { unit: "関数y=ax^2", progress: 0 }, { unit: "相似", progress: 0 }, { unit: "三平方の定理", progress: 0 }],
-
     英語: [{ unit: "現在完了", progress: 0 }, { unit: "分詞", progress: 0 }, { unit: "関係代名詞", progress: 0 }, { unit: "仮定法", progress: 0 }],
-
     理科: [{ unit: "生命の連続性", progress: 0 }, { unit: "イオン", progress: 0 }, { unit: "運動とエネルギー", progress: 0 }, { unit: "地球と宇宙", progress: 0 }],
-
     社会: [{ unit: "公民：現代社会", progress: 0 }, { unit: "歴史：近現代", progress: 0 }],
-
     国語: [{ unit: "現代文", progress: 0 }, { unit: "古文・漢文", progress: 0 }]
-
   },
-
   高1: {
-
     数学Ⅰ: [{ unit: "数と式", progress: 0 }, { unit: "二次関数", progress: 0 }, { unit: "図形と計量", progress: 0 }, { unit: "データの分析", progress: 0 }],
-
     数学A: [{ unit: "場合の数と確率", progress: 0 }, { unit: "図形の性質", progress: 0 }, { unit: "整数の性質", progress: 0 }],
-
     英語: [{ unit: "文型・時制", progress: 0 }, { unit: "助動詞", progress: 0 }, { unit: "不定詞・動名詞", progress: 0 }, { unit: "分詞・関係詞", progress: 0 }],
-
     化学基礎: [{ unit: "物質の構成", progress: 0 }, { unit: "物質の変化", progress: 0 }],
-
     生物基礎: [{ unit: "生物と遺伝子", progress: 0 }, { unit: "生物の体内環境", progress: 0 }],
-
     物理基礎: [{ unit: "物体の運動", progress: 0 }, { unit: "エネルギー", progress: 0 }],
-
     地学基礎: [{ unit: "地球の構造", progress: 0 }, { unit: "宇宙", progress: 0 }]
-
   },
-
   高2: {
-
     数学Ⅱ: [{ unit: "式と証明", progress: 0 }, { unit: "複素数", progress: 0 }, { unit: "図形と方程式", progress: 0 }, { unit: "三角関数", progress: 0 }, { unit: "指数・対数", progress: 0 }, { unit: "微積分", progress: 0 }],
-
     数学B: [{ unit: "数列", progress: 0 }, { unit: "統計", progress: 0 }],
-
     英語: [{ unit: "比較・仮定法", progress: 0 }, { unit: "否定・倒置", progress: 0 }],
-
     物理: [{ unit: "力学", progress: 0 }, { unit: "電磁気", progress: 0 }],
-
     化学: [{ unit: "物質の状態", progress: 0 }, { unit: "無機物質", progress: 0 }, { unit: "有機化合物", progress: 0 }],
-
     生物: [{ unit: "細胞と分子", progress: 0 }, { unit: "代謝", progress: 0 }, { unit: "遺伝", progress: 0 }],
-
     地学: [{ unit: "地球内部", progress: 0 }, { unit: "地層", progress: 0 }]
-
   },
-
   高3: {
-
     数学Ⅲ: [{ unit: "極限", progress: 0 }, { unit: "微積分", progress: 0 }],
-
     数学C: [{ unit: "ベクトル", progress: 0 }, { unit: "複素数平面", progress: 0 }],
-
     英語: [{ unit: "長文読解", progress: 0 }, { unit: "英作文", progress: 0 }],
-
     物理: [{ unit: "原子", progress: 0 }],
-
     化学: [{ unit: "高分子", progress: 0 }],
-
     生物: [{ unit: "生態系", progress: 0 }, { unit: "進化", progress: 0 }],
-
     地学: [{ unit: "宇宙の構造", progress: 0 }]
-
   }
-
 };
 
-
-
 const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => {
-
   if (!data || data.length < 2) return <div className="text-center text-xs text-slate-300 py-4">データが不足しています</div>;
-
   const height = 100;
-
   const width = 300;
-
   const maxVal = 100;
-
   const points = data.map((val, i) => {
-
     const x = (i / (data.length - 1)) * width;
-
     const y = height - (val / maxVal) * height;
-
     return `${x},${y}`;
-
   }).join(" ");
 
-
-
   return (
-
     <div className="w-full h-32 mb-4">
-
       <svg viewBox={`0 -10 ${width} ${height + 20}`} className="w-full h-full overflow-visible">
-
         <line x1="0" y1="0" x2={width} y2="0" stroke="#e2e8f0" strokeWidth="1" />
-
         <line x1="0" y1={height/2} x2={width} y2={height/2} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4" />
-
         <line x1="0" y1={height} x2={width} y2={height} stroke="#e2e8f0" strokeWidth="1" />
-
         <polyline fill="none" stroke={color} strokeWidth="3" points={points} />
-
         {data.map((val, i) => {
-
           const x = (i / (data.length - 1)) * width;
-
           const y = height - (val / maxVal) * height;
-
           return (
-
             <g key={i}>
-
               <circle cx={x} cy={y} r="4" fill="white" stroke={color} strokeWidth="2" />
-
               <text x={x} y={y - 10} textAnchor="middle" fontSize="10" fill={color} fontWeight="bold">{val}</text>
-
             </g>
-
           );
-
         })}
-
       </svg>
-
     </div>
-
   );
-
 };
 
 // ==========================================
-// 3. アプリケーション本体 (Update版)
+// 3. アプリケーション本体
 // ==========================================
 
 function App() {
@@ -963,3 +825,6 @@ function App() {
     </div>
   );
 }
+
+const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+root.render(<React.StrictMode><App /></React.StrictMode>);
