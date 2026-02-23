@@ -3,9 +3,11 @@ import ReactDOM from 'react-dom/client';
 import './style.css'; 
 import { initializeApp } from "firebase/app";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
+// ★【追加】Firestore（バックアップ用）の機能をインポート
+import { getFirestore, doc, setDoc } from "firebase/firestore"; 
 
 // ==========================================
-// 1. Firebase (通知機能) の設定エリア
+// 1. Firebase の設定エリア
 // ==========================================
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
@@ -18,8 +20,11 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-let messaging: any = null;
 
+// ★【追加】データベース(db)を使えるように準備
+const db = getFirestore(app);
+
+let messaging: any = null;
 try {
   if (typeof window !== "undefined") {
     messaging = getMessaging(app);
@@ -53,7 +58,6 @@ const onMessageListener = () =>
 // ==========================================
 // 2. データ定義 & ユーティリティ
 // ==========================================
-
 const GRADE_CURRICULUM: any = {
   中1: {
     数学: [{ unit: "正の数・負の数", progress: 0 }, { unit: "文字と式", progress: 0 }, { unit: "方程式", progress: 0 }, { unit: "比例・反比例", progress: 0 }, { unit: "平面図形", progress: 0 }, { unit: "空間図形", progress: 0 }, { unit: "データの活用", progress: 0 }],
@@ -141,7 +145,6 @@ const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => 
 // ==========================================
 // 3. アプリケーション本体
 // ==========================================
-
 function App() {
   const [students, setStudents] = useState(() => {
     const saved = localStorage.getItem("lms_v20_data");
@@ -151,10 +154,8 @@ function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState<"student" | "teacher">("student");
   
-  // ログイン入力用
   const [inputId, setInputId] = useState("");
   const [inputPass, setInputPass] = useState("");
-  
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [resetId, setResetId] = useState("");
   const [resetEmail, setResetEmail] = useState("");
@@ -184,12 +185,57 @@ function App() {
   const [newStudentSubjects, setNewStudentSubjects] = useState<string[]>([]);
   const [isEditingSubjects, setIsEditingSubjects] = useState(false);
 
-  // ★チャット・報告機能用State
+  // チャット・報告用
   const [calendarSubView, setCalendarSubView] = useState<"chat" | "report">("chat");
   const [chatInput, setChatInput] = useState("");
   const [publicReport, setPublicReport] = useState("");
   const [internalReport, setInternalReport] = useState("");
   const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // ====================================================
+  // ★ 追加：自動バックアップ機能 (Time Machine)
+  // ====================================================
+  const checkAndCreateBackup = async (currentData: any) => {
+    if (!currentData || Object.keys(currentData).length === 0) return;
+
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    
+    // 1. 最後にバックアップした日を確認
+    const lastBackupDate = localStorage.getItem("lms_last_auto_backup");
+    
+    // 2. 1週間 (7日) 経過しているかチェック
+    const oneWeekInMs = 7 * 24 * 60 * 60 * 1000;
+    const shouldBackup = !lastBackupDate || (today.getTime() - new Date(lastBackupDate).getTime() > oneWeekInMs);
+
+    if (shouldBackup) {
+      try {
+        console.log("⏳ 自動バックアップを作成中...");
+        // Firestoreの "backups" に日付つきで保存
+        await setDoc(doc(db, "backups", todayStr), { 
+          data: currentData,
+          createdAt: new Date().toISOString()
+        });
+
+        // バックアップ完了日を記録
+        localStorage.setItem("lms_last_auto_backup", todayStr);
+        console.log(`✅ バックアップ完了: backups/${todayStr}`);
+        alert(`【自動バックアップ】\n前回の保存から1週間経過したため、\n${todayStr} のバックアップをクラウドに作成しました。`);
+        
+      } catch (e) {
+        console.error("バックアップ作成失敗:", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // 講師がログインしていて、生徒データがある場合のみバックアップチェック
+    if (role === "teacher" && Object.keys(students).length > 0) {
+      checkAndCreateBackup(students);
+    }
+  }, [students, role]);
+  // ====================================================
+
 
   useEffect(() => {
     onMessageListener()
@@ -212,14 +258,12 @@ function App() {
     }
   }, [newStudentGrade]);
 
-  // チャット自動スクロール
   useEffect(() => {
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [students, currentView, calendarSubView, currentStudentId]);
 
-  // 日付が変わったら報告入力欄を更新
   useEffect(() => {
     if (currentStudentId && students[currentStudentId]) {
       const s = students[currentStudentId];
@@ -314,8 +358,8 @@ function App() {
       isFirstLogin: true, 
       tests: [], mocks: [], records: [], homeworks: [], materials: [], meetingUrl: "",
       profile: {},
-      messages: [], // ★チャット履歴用
-      reports: []   // ★授業報告用
+      messages: [],
+      reports: [] 
     };
 
     setStudents({ ...students, [newStudentId]: newStudent });
@@ -355,13 +399,11 @@ function App() {
     return days;
   };
 
-  // ★チャット送信機能
   const sendMessage = () => {
     if (!currentStudentId || !chatInput.trim()) return;
     const updated = { ...students };
     if (!updated[currentStudentId].messages) updated[currentStudentId].messages = [];
     
-    // 今日の日付でタイムスタンプ作成
     const now = new Date();
     const timeString = `${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
     
@@ -374,7 +416,6 @@ function App() {
     setChatInput("");
   };
 
-  // ★授業報告保存機能
   const saveReport = () => {
     if (!currentStudentId) return;
     const updated = { ...students };
@@ -455,7 +496,6 @@ function App() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans selection:bg-rose-100 pb-20">
       
-      {/* 初回ログインモーダル */}
       {isFirstLoginSetup && (
         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white p-8 md:p-10 rounded-[2.5rem] w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-300">
@@ -490,7 +530,6 @@ function App() {
         </div>
       )}
 
-      {/* パスワード忘れモーダル */}
       {isForgotPassword && (
         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4">
            <div className="bg-white p-8 rounded-[2rem] w-full max-w-sm shadow-2xl relative animate-in fade-in zoom-in duration-300">
@@ -506,7 +545,6 @@ function App() {
         </div>
       )}
 
-      {/* ログイン画面 */}
       {!loggedIn ? (
         <div className={`fixed inset-0 flex items-center justify-center ${role === "student" ? "bg-blue-50" : "bg-rose-50"}`}>
           <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-sm border border-white">
@@ -529,7 +567,6 @@ function App() {
           </header>
 
           <div className="grid lg:grid-cols-12 gap-8">
-            {/* 左カラム */}
             <div className="lg:col-span-4 space-y-6">
               {role === "teacher" ? (
                 <>
@@ -588,7 +625,6 @@ function App() {
               )}
             </div>
 
-            {/* 右カラム */}
             <div className="lg:col-span-8">
               {currentStudent ? (
                 <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100 flex flex-col">
@@ -639,12 +675,8 @@ function App() {
                     ))}
                   </div>
 
-                  {/* ==========================================
-                      ★ カレンダー ＆ 新チャット・報告エリア
-                  ========================================== */}
                   {currentView === "calendar" && (
                     <div className="grid md:grid-cols-2 gap-10 animate-in fade-in flex-1 overflow-hidden">
-                      {/* 左：カレンダー */}
                       <div className="shrink-0">
                         <div className="flex justify-between items-center mb-6 px-2">
                           <h3 className="font-black text-xl text-slate-800">{viewDate.getFullYear()}.{viewDate.getMonth() + 1}</h3>
@@ -652,22 +684,18 @@ function App() {
                         </div>
                         <div className="grid grid-cols-7 gap-2">
                           {getCalendarDays().map((date, i) => {
-                             // 報告がある日にドットをつける
                              const hasReport = date && currentStudent.reports?.some((r: any) => r.date === date && (r.public || r.internal));
                              return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative transition-all ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasReport && <span className={`w-1.5 h-1.5 rounded-full absolute bottom-2 ${selectedDate === date ? "bg-white" : "bg-rose-400"}`} />}</button>;
                           })}
                         </div>
                       </div>
                       
-                      {/* 右：チャット＆報告タブ */}
                       <div className="flex flex-col h-[500px] border border-slate-100 rounded-[2rem] overflow-hidden bg-slate-50 shadow-inner">
-                        {/* 内部タブ切替 */}
                         <div className="flex bg-white border-b border-slate-100 p-2 shrink-0">
                           <button onClick={() => setCalendarSubView("chat")} className={`flex-1 py-3 text-xs font-black rounded-xl transition-all ${calendarSubView === "chat" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:bg-slate-50"}`}>💬 チャット</button>
                           <button onClick={() => setCalendarSubView("report")} className={`flex-1 py-3 text-xs font-black rounded-xl transition-all ${calendarSubView === "report" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:bg-slate-50"}`}>📝 授業報告</button>
                         </div>
 
-                        {/* --- チャット画面 --- */}
                         {calendarSubView === "chat" && (
                           <div className="flex flex-col flex-1 overflow-hidden">
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scroll" ref={chatScrollRef}>
@@ -694,7 +722,6 @@ function App() {
                           </div>
                         )}
 
-                        {/* --- 授業報告画面 --- */}
                         {calendarSubView === "report" && (
                           <div className="flex flex-col flex-1 p-6 overflow-y-auto custom-scroll">
                             <div className="flex items-center gap-2 mb-6">
@@ -722,7 +749,6 @@ function App() {
                                     {publicReport || "この日の報告はまだ入力されていません。"}
                                   </p>
                                 </div>
-                                {/* 生徒には内部報告は絶対にレンダリングしない */}
                               </div>
                             )}
                           </div>
@@ -731,7 +757,6 @@ function App() {
                     </div>
                   )}
 
-                  {/* 他のタブコンテンツ（Progress, Test, Homework, Materials）はそのまま */}
                   {currentView === "progress" && (
                     <div className="animate-in fade-in">
                       <div className="flex gap-2 overflow-x-auto pb-6 no-scrollbar">
@@ -836,10 +861,8 @@ function App() {
         </div>
       )}
 
-      {/* 画像プレビュー用モーダル */}
       {previewImg && <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-8 backdrop-blur-md cursor-zoom-out" onClick={() => setPreviewImg(null)}><img src={previewImg} className="max-w-full max-h-full rounded-lg shadow-2xl" /></div>}
       
-      {/* スクロールバー非表示用CSS */}
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; } .custom-scroll::-webkit-scrollbar { width: 4px; } .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }`}</style>
     </div>
   );
