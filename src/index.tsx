@@ -8,7 +8,7 @@ import { getMessaging, getToken, onMessage } from "firebase/messaging";
 // 1. Firebase (通知機能) の設定エリア
 // ==========================================
 const firebaseConfig = {
-  apiKey: "AIzaSyBwYqnTXHkFC-IwTp6wBNOGi19TBnYjStU",
+  apiKey: "",
   authDomain: "lms-pwa-3a9f0.firebaseapp.com",
   projectId: "lms-pwa-3a9f0",
   storageBucket: "lms-pwa-3a9f0.firebasestorage.app",
