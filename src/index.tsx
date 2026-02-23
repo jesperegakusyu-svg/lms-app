@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactDOM from 'react-dom/client';
 import './style.css'; 
 import { initializeApp } from "firebase/app";
@@ -7,7 +7,6 @@ import { getMessaging, getToken, onMessage } from "firebase/messaging";
 // ==========================================
 // 1. Firebase (通知機能) の設定エリア
 // ==========================================
-// 【修正】apiKey を直接書かずに環境変数から読み込む設定に変更しました。
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
   authDomain: "lms-pwa-3a9f0.firebaseapp.com",
@@ -156,46 +155,42 @@ function App() {
   const [inputId, setInputId] = useState("");
   const [inputPass, setInputPass] = useState("");
   
-  // パスワードリセット用
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [resetId, setResetId] = useState("");
   const [resetEmail, setResetEmail] = useState("");
 
-  // ログイン中ユーザー情報
   const [currentStudentId, setCurrentStudentId] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
   const [currentView, setCurrentView] = useState<"calendar" | "progress" | "test" | "mock" | "homework" | "materials">("calendar");
 
-  // 初回ログインセットアップ用
   const [isFirstLoginSetup, setIsFirstLoginSetup] = useState(false);
   const [setupData, setSetupData] = useState({
     newPass: "", lastName: "", firstName: "", email: "", gender: "未回答",
     address: "", schoolPref: "", schoolName: "", schoolGrade: ""
   });
 
-  // その他UI用State
   const [previewImg, setPreviewImg] = useState<string | null>(null);
-  const [adviceText, setAdviceText] = useState("");
-  const [studentComment, setStudentComment] = useState("");
   const [viewDate, setViewDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString());
   const [fcmToken, setFcmToken] = useState<string | null>(null);
 
-  // 教材・テスト作成用
   const [matTitle, setMatTitle] = useState("");
   const [matUrl, setMatUrl] = useState("");
   const [testTitle, setTestTitle] = useState("");
   const [graphSubject, setGraphSubject] = useState("数学");
 
-  // 【講師用】新規生徒作成
   const [newStudentId, setNewStudentId] = useState("");
   const [newStudentGrade, setNewStudentGrade] = useState("中1");
   const [newStudentSubjects, setNewStudentSubjects] = useState<string[]>([]);
-  
-  // 【講師用】科目編集モード
   const [isEditingSubjects, setIsEditingSubjects] = useState(false);
 
-  // 通知監視 & データ保存
+  // ★チャット・報告機能用State
+  const [calendarSubView, setCalendarSubView] = useState<"chat" | "report">("chat");
+  const [chatInput, setChatInput] = useState("");
+  const [publicReport, setPublicReport] = useState("");
+  const [internalReport, setInternalReport] = useState("");
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     onMessageListener()
       .then((payload: any) => {
@@ -216,6 +211,23 @@ function App() {
       setNewStudentSubjects([]);
     }
   }, [newStudentGrade]);
+
+  // チャット自動スクロール
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [students, currentView, calendarSubView, currentStudentId]);
+
+  // 日付が変わったら報告入力欄を更新
+  useEffect(() => {
+    if (currentStudentId && students[currentStudentId]) {
+      const s = students[currentStudentId];
+      const report = s.reports?.find((r: any) => r.date === selectedDate);
+      setPublicReport(report?.public || "");
+      setInternalReport(report?.internal || "");
+    }
+  }, [selectedDate, currentStudentId, students]);
 
   const generateNextId = () => {
     const yearPrefix = new Date().getFullYear().toString().slice(-2);
@@ -252,15 +264,12 @@ function App() {
     if (!newPass || !lastName || !firstName || !email || !address || !schoolName) {
       return alert("すべての必須項目を入力してください");
     }
-    
     const updated = { ...students };
     const s = updated[currentStudentId!];
-    
     s.password = newPass;
     s.name = `${lastName} ${firstName}`; 
     s.profile = { lastName, firstName, email, gender, address, schoolPref, schoolName, schoolGrade };
     s.isFirstLogin = false; 
-    
     setStudents(updated);
     setIsFirstLoginSetup(false);
     setLoggedIn(true);
@@ -276,7 +285,7 @@ function App() {
       setResetId("");
       setResetEmail("");
     } else {
-      alert("IDとメールアドレスが一致するユーザーが見つかりません。\n(※初回セットアップでメールアドレスを登録していない場合は利用できません)");
+      alert("IDとメールアドレスが一致するユーザーが見つかりません。");
     }
   };
 
@@ -301,13 +310,12 @@ function App() {
     });
 
     const newStudent = {
-      name, 
-      password: pass, 
-      grade: newStudentGrade, 
-      subjects: selectedSubjectsData, 
+      name, password: pass, grade: newStudentGrade, subjects: selectedSubjectsData, 
       isFirstLogin: true, 
       tests: [], mocks: [], records: [], homeworks: [], materials: [], meetingUrl: "",
-      profile: {}
+      profile: {},
+      messages: [], // ★チャット履歴用
+      reports: []   // ★授業報告用
     };
 
     setStudents({ ...students, [newStudentId]: newStudent });
@@ -320,7 +328,6 @@ function App() {
     if (!currentStudentId) return;
     const updated = { ...students };
     const s = updated[currentStudentId];
-
     if (s.subjects[subjName]) {
       if (window.confirm(`${subjName} を削除しますか？\nこれまでの進捗データも消えます。`)) {
         delete s.subjects[subjName];
@@ -348,19 +355,46 @@ function App() {
     return days;
   };
 
-  const saveRecord = (type: "advice" | "question") => {
-    if (!currentStudentId) return;
-    const text = type === "advice" ? adviceText : studentComment;
-    if (!text) return;
+  // ★チャット送信機能
+  const sendMessage = () => {
+    if (!currentStudentId || !chatInput.trim()) return;
     const updated = { ...students };
-    if (!updated[currentStudentId].records) updated[currentStudentId].records = [];
-    updated[currentStudentId].records.push({ date: selectedDate, type, text, timestamp: new Date().toLocaleTimeString() });
+    if (!updated[currentStudentId].messages) updated[currentStudentId].messages = [];
+    
+    // 今日の日付でタイムスタンプ作成
+    const now = new Date();
+    const timeString = `${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+    
+    updated[currentStudentId].messages.push({
+      sender: role,
+      text: chatInput,
+      timestamp: timeString
+    });
     setStudents(updated);
-    if (type === "advice") setAdviceText(""); else setStudentComment("");
-    alert("保存しました");
+    setChatInput("");
   };
 
-  // ★宿題アップロード機能（復元）
+  // ★授業報告保存機能
+  const saveReport = () => {
+    if (!currentStudentId) return;
+    const updated = { ...students };
+    if (!updated[currentStudentId].reports) updated[currentStudentId].reports = [];
+    
+    const existingIndex = updated[currentStudentId].reports.findIndex((r: any) => r.date === selectedDate);
+    if (existingIndex >= 0) {
+      updated[currentStudentId].reports[existingIndex].public = publicReport;
+      updated[currentStudentId].reports[existingIndex].internal = internalReport;
+    } else {
+      updated[currentStudentId].reports.push({
+        date: selectedDate,
+        public: publicReport,
+        internal: internalReport
+      });
+    }
+    setStudents(updated);
+    alert("授業報告を保存しました");
+  };
+
   const handleHomeworkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && currentStudentId) {
@@ -421,80 +455,48 @@ function App() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans selection:bg-rose-100 pb-20">
       
-      {/* --- 初回ログインセットアップ画面（モーダル） --- */}
+      {/* 初回ログインモーダル */}
       {isFirstLoginSetup && (
         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white p-8 md:p-10 rounded-[2.5rem] w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-300">
             <h2 className="text-2xl font-black text-center mb-2">👋 はじめまして！</h2>
             <p className="text-center text-slate-400 text-xs font-bold mb-8">最初にあなたのプロフィールを教えてください</p>
-            
             <div className="space-y-4">
               <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 mb-6">
                 <label className="text-[10px] font-black text-rose-400 block mb-1">新しいパスワード (必須)</label>
                 <input className="w-full bg-white p-3 rounded-xl font-bold outline-none border-2 border-rose-100 focus:border-rose-400" type="password" placeholder="忘れないパスワードを設定" value={setupData.newPass} onChange={e => setSetupData({...setupData, newPass: e.target.value})} />
               </div>
-
               <div className="bg-slate-50 p-4 rounded-2xl mb-6">
                 <label className="text-[10px] font-black text-slate-400 block mb-1">メールアドレス (パスワード復旧用)</label>
                 <input className="w-full bg-white p-3 rounded-xl font-bold outline-none border-2 border-slate-100 focus:border-slate-400" type="email" placeholder="example@email.com" value={setupData.email} onChange={e => setSetupData({...setupData, email: e.target.value})} />
               </div>
-
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 ml-2">姓 (Last Name)</label>
-                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="山田" value={setupData.lastName} onChange={e => setSetupData({...setupData, lastName: e.target.value})} />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 ml-2">名 (First Name)</label>
-                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="太郎" value={setupData.firstName} onChange={e => setSetupData({...setupData, firstName: e.target.value})} />
-                </div>
+                <div><label className="text-[10px] font-black text-slate-400 ml-2">姓</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.lastName} onChange={e => setSetupData({...setupData, lastName: e.target.value})} /></div>
+                <div><label className="text-[10px] font-black text-slate-400 ml-2">名</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.firstName} onChange={e => setSetupData({...setupData, firstName: e.target.value})} /></div>
               </div>
-
               <div>
                 <label className="text-[10px] font-black text-slate-400 ml-2">性別</label>
-                <select className="w-full bg-slate-100 p-3 rounded-xl font-bold outline-none" value={setupData.gender} onChange={e => setSetupData({...setupData, gender: e.target.value})}>
-                  <option value="未回答">選択しない</option>
-                  <option value="男性">男性</option>
-                  <option value="女性">女性</option>
-                  <option value="その他">その他</option>
-                </select>
+                <select className="w-full bg-slate-100 p-3 rounded-xl font-bold outline-none" value={setupData.gender} onChange={e => setSetupData({...setupData, gender: e.target.value})}><option value="未回答">選択しない</option><option value="男性">男性</option><option value="女性">女性</option><option value="その他">その他</option></select>
               </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 ml-2">住所</label>
-                <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="例: 東京都渋谷区..." value={setupData.address} onChange={e => setSetupData({...setupData, address: e.target.value})} />
-              </div>
-
+              <div><label className="text-[10px] font-black text-slate-400 ml-2">住所</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.address} onChange={e => setSetupData({...setupData, address: e.target.value})} /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 ml-2">学校の都道府県</label>
-                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="東京都" value={setupData.schoolPref} onChange={e => setSetupData({...setupData, schoolPref: e.target.value})} />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 ml-2">学年</label>
-                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolGrade} onChange={e => setSetupData({...setupData, schoolGrade: e.target.value})} />
-                </div>
+                <div><label className="text-[10px] font-black text-slate-400 ml-2">都道府県</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolPref} onChange={e => setSetupData({...setupData, schoolPref: e.target.value})} /></div>
+                <div><label className="text-[10px] font-black text-slate-400 ml-2">学年</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolGrade} onChange={e => setSetupData({...setupData, schoolGrade: e.target.value})} /></div>
               </div>
-              
-              <div>
-                <label className="text-[10px] font-black text-slate-400 ml-2">学校名</label>
-                <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="〇〇中学校" value={setupData.schoolName} onChange={e => setSetupData({...setupData, schoolName: e.target.value})} />
-              </div>
-
-              <button onClick={handleFirstLoginSetup} className="w-full py-4 mt-6 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700 transition-all">登録してスタート！ 🚀</button>
+              <div><label className="text-[10px] font-black text-slate-400 ml-2">学校名</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolName} onChange={e => setSetupData({...setupData, schoolName: e.target.value})} /></div>
+              <button onClick={handleFirstLoginSetup} className="w-full py-4 mt-6 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700 transition-all">登録してスタート！</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* --- パスワード忘れモーダル --- */}
+      {/* パスワード忘れモーダル */}
       {isForgotPassword && (
         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4">
            <div className="bg-white p-8 rounded-[2rem] w-full max-w-sm shadow-2xl relative animate-in fade-in zoom-in duration-300">
-             <button onClick={() => setIsForgotPassword(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold">✕ 閉じる</button>
+             <button onClick={() => setIsForgotPassword(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold">✕</button>
              <h3 className="text-xl font-black text-slate-800 mb-4 text-center">パスワード再発行</h3>
-             <p className="text-xs text-slate-500 mb-6 text-center">登録時のIDとメールアドレスを入力してください。<br/>一致した場合、メールでパスワードを送信します。</p>
-             
+             <p className="text-xs text-slate-500 mb-6 text-center">IDとメールアドレスを入力してください。</p>
              <div className="space-y-4">
                <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" placeholder="ID (例: 260001)" value={resetId} onChange={e => setResetId(e.target.value)} />
                <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" type="email" placeholder="メールアドレス" value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
@@ -504,7 +506,7 @@ function App() {
         </div>
       )}
 
-      {/* --- ログイン画面 --- */}
+      {/* ログイン画面 */}
       {!loggedIn ? (
         <div className={`fixed inset-0 flex items-center justify-center ${role === "student" ? "bg-blue-50" : "bg-rose-50"}`}>
           <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-sm border border-white">
@@ -515,14 +517,8 @@ function App() {
             </div>
             <input className="w-full p-4 mb-4 bg-slate-50 rounded-2xl outline-none font-bold" placeholder="ID" value={inputId} onChange={(e) => setInputId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
             <input className="w-full p-4 mb-6 bg-slate-50 rounded-2xl outline-none font-bold" type="password" placeholder="PASS" value={inputPass} onChange={(e) => setInputPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
-            
             <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-white shadow-lg mb-4 ${role === "student" ? "bg-blue-600" : "bg-rose-600"}`}>LOGIN</button>
-            
-            {role === "student" && (
-              <button onClick={() => setIsForgotPassword(true)} className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 underline">
-                パスワードを忘れた方はこちら
-              </button>
-            )}
+            {role === "student" && <button onClick={() => setIsForgotPassword(true)} className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 underline">パスワードを忘れた方</button>}
           </div>
         </div>
       ) : (
@@ -533,7 +529,7 @@ function App() {
           </header>
 
           <div className="grid lg:grid-cols-12 gap-8">
-            {/* --- 左カラム：生徒リスト or プロフィール --- */}
+            {/* 左カラム */}
             <div className="lg:col-span-4 space-y-6">
               {role === "teacher" ? (
                 <>
@@ -543,30 +539,20 @@ function App() {
                       <div><label className="text-[10px] font-black text-slate-400 ml-2">AUTO-ID</label><input value={newStudentId} readOnly className="w-full p-4 bg-slate-100 rounded-2xl text-sm font-black text-slate-500 cursor-not-allowed" /></div>
                       <input id="nName" placeholder="生徒氏名 (仮)" className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-bold outline-none" />
                       <input id="nPass" placeholder="初期パスワード" className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-bold outline-none" />
-                      
-                      {/* 学年選択 */}
                       <select value={newStudentGrade} onChange={(e) => setNewStudentGrade(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-black outline-none cursor-pointer">
                         {Object.keys(GRADE_CURRICULUM).map(g => <option key={g} value={g}>{g}</option>)}
                       </select>
-
-                      {/* 科目選択 (チェックボックス) */}
                       <div className="bg-slate-50 p-4 rounded-2xl">
                          <p className="text-[10px] font-bold text-slate-400 mb-2">受講科目を選択</p>
                          <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto">
                            {GRADE_CURRICULUM[newStudentGrade] && Object.keys(GRADE_CURRICULUM[newStudentGrade]).map(subj => (
                              <label key={subj} className="flex items-center gap-2 text-xs font-bold cursor-pointer">
-                               <input type="checkbox" checked={newStudentSubjects.includes(subj)} 
-                                 onChange={e => {
-                                   if (e.target.checked) setNewStudentSubjects([...newStudentSubjects, subj]);
-                                   else setNewStudentSubjects(newStudentSubjects.filter(s => s !== subj));
-                                 }}
-                               />
+                               <input type="checkbox" checked={newStudentSubjects.includes(subj)} onChange={e => { e.target.checked ? setNewStudentSubjects([...newStudentSubjects, subj]) : setNewStudentSubjects(newStudentSubjects.filter(s => s !== subj)); }} />
                                {subj}
                              </label>
                            ))}
                          </div>
                       </div>
-
                       <button className="w-full mt-2 py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700" onClick={createStudent}>生徒を作成</button>
                     </div>
                   </div>
@@ -583,22 +569,17 @@ function App() {
                   <div className="relative z-10">
                     <p className="text-[10px] font-black bg-white/20 px-4 py-1.5 rounded-full inline-block uppercase tracking-widest">{currentStudent!.grade}</p>
                     <h2 className="text-3xl font-black mt-4 mb-2">{currentStudent!.name}</h2>
-                    {/* プロフィール情報の表示 */}
                     {currentStudent.profile && (
                       <div className="text-xs text-white/70 mb-6 font-bold leading-relaxed">
-                        {currentStudent.profile.schoolName} {currentStudent.profile.schoolGrade}<br/>
-                        {currentStudent.profile.address}
+                        {currentStudent.profile.schoolName} {currentStudent.profile.schoolGrade}<br/>{currentStudent.profile.address}
                       </div>
                     )}
-                    
                     {currentStudent.meetingUrl ? (
                       <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="block w-full py-5 bg-rose-500 hover:bg-rose-400 text-white rounded-2xl font-black text-center shadow-lg transform hover:-translate-y-1 transition-all animate-pulse mb-6 border-2 border-rose-400/50">🎥 今すぐ授業に参加</a>
                     ) : <div className="bg-white/10 p-4 rounded-xl text-center text-xs font-bold text-white/50 mb-6 border border-white/10">授業URL未設定</div>}
-                    
                     <div className="pt-8 border-t border-white/20">
                       <p className="text-[10px] font-bold opacity-60 mb-2">QUICK ACTION</p>
                       <button onClick={handleNotificationSetup} className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-purple-600 text-white rounded-2xl font-black text-xs cursor-pointer hover:bg-purple-50 shadow-lg transition-all">🔔 通知を受け取る設定</button>
-                      {/* ★宿題提出ボタン（復元） */}
                       <label className="flex items-center justify-center gap-2 w-full py-4 bg-white text-blue-600 rounded-2xl font-black text-xs cursor-pointer hover:bg-blue-50 shadow-lg">📸 宿題を提出<input type="file" accept="image/*" className="hidden" onChange={handleHomeworkUpload} /></label>
                     </div>
                   </div>
@@ -607,12 +588,11 @@ function App() {
               )}
             </div>
 
-            {/* --- 右カラム：詳細エリア --- */}
+            {/* 右カラム */}
             <div className="lg:col-span-8">
               {currentStudent ? (
-                <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100">
+                <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100 flex flex-col">
                   
-                  {/* 講師用：生徒管理パネル（科目の編集など） */}
                   {role === "teacher" && (
                     <div className="mb-8">
                       <div className="p-6 bg-slate-800 rounded-[2rem] text-white shadow-lg mb-4">
@@ -627,8 +607,6 @@ function App() {
                            {currentStudent.meetingUrl && <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="px-6 py-4 bg-rose-500 text-white rounded-xl font-black text-xs">入室</a>}
                         </div>
                       </div>
-                      
-                      {/* プロフィール詳細表示 */}
                       <div className="flex justify-between items-start bg-slate-50 p-6 rounded-2xl border border-slate-100">
                         <div className="text-xs font-bold text-slate-600 space-y-1">
                           <p><span className="text-slate-400">氏名:</span> {currentStudent.profile?.lastName} {currentStudent.profile?.firstName} ({currentStudent.profile?.gender})</p>
@@ -640,8 +618,6 @@ function App() {
                           {isEditingSubjects ? "編集を終了" : "科目を設定変更"}
                         </button>
                       </div>
-
-                      {/* 科目編集エリア */}
                       {isEditingSubjects && (
                         <div className="mt-4 p-6 bg-yellow-50 rounded-2xl border border-yellow-200 animate-in fade-in">
                           <h4 className="font-black text-yellow-600 mb-4">履修科目の変更 (リアルタイム反映)</h4>
@@ -657,46 +633,105 @@ function App() {
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2 mb-8 bg-slate-100 p-1.5 rounded-2xl w-fit">
-                    {/* ★HOMEWORKタブを復元 */}
-                    {[{ k: "calendar", l: "📅 CALENDAR" }, { k: "progress", l: "📊 PROGRESS" }, { k: "test", l: "📝 TESTS" }, { k: "homework", l: "🏠 HOMEWORK" }, { k: "materials", l: "📚 MATERIALS" }].map((tab) => (
+                  <div className="flex flex-wrap gap-2 mb-8 bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0">
+                    {[{ k: "calendar", l: "📅 CALENDAR / CHAT" }, { k: "progress", l: "📊 PROGRESS" }, { k: "test", l: "📝 TESTS" }, { k: "homework", l: "🏠 HOMEWORK" }, { k: "materials", l: "📚 MATERIALS" }].map((tab) => (
                       <button key={tab.k} onClick={() => setCurrentView(tab.k as any)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all ${currentView === tab.k ? "bg-white text-slate-800 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>{tab.l}</button>
                     ))}
                   </div>
 
-                  {/* 各ビューの表示 */}
+                  {/* ==========================================
+                      ★ カレンダー ＆ 新チャット・報告エリア
+                  ========================================== */}
                   {currentView === "calendar" && (
-                    <div className="grid md:grid-cols-2 gap-10 animate-in fade-in">
-                      <div>
+                    <div className="grid md:grid-cols-2 gap-10 animate-in fade-in flex-1 overflow-hidden">
+                      {/* 左：カレンダー */}
+                      <div className="shrink-0">
                         <div className="flex justify-between items-center mb-6 px-2">
                           <h3 className="font-black text-xl text-slate-800">{viewDate.getFullYear()}.{viewDate.getMonth() + 1}</h3>
                           <div className="flex gap-2"><button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() - 1)))} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-lg text-xs">◀</button><button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() + 1)))} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-lg text-xs">▶</button></div>
                         </div>
                         <div className="grid grid-cols-7 gap-2">
                           {getCalendarDays().map((date, i) => {
-                             const hasRecord = date && currentStudent.records?.some((r: any) => r.date === date);
-                             return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative transition-all ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasRecord && <span className={`w-1.5 h-1.5 rounded-full absolute bottom-2 ${selectedDate === date ? "bg-white" : "bg-green-400"}`} />}</button>;
+                             // 報告がある日にドットをつける
+                             const hasReport = date && currentStudent.reports?.some((r: any) => r.date === date && (r.public || r.internal));
+                             return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative transition-all ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasReport && <span className={`w-1.5 h-1.5 rounded-full absolute bottom-2 ${selectedDate === date ? "bg-white" : "bg-rose-400"}`} />}</button>;
                           })}
                         </div>
                       </div>
-                      <div className="flex flex-col h-full">
-                        <div className="pb-4 border-b border-slate-100 mb-4"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">DATE</p><h4 className="text-2xl font-black text-slate-800">{selectedDate}</h4></div>
-                        <div className="mb-6">
-                           <textarea className={`w-full h-20 p-4 rounded-2xl border-none outline-none text-sm font-medium focus:ring-2 transition-all resize-none ${role === "teacher" ? "bg-rose-50 focus:ring-rose-200" : "bg-blue-50 focus:ring-blue-200"}`} placeholder={role === "teacher" ? "授業記録..." : "質問・振り返り..."} value={role === "teacher" ? adviceText : studentComment} onChange={(e) => role === "teacher" ? setAdviceText(e.target.value) : setStudentComment(e.target.value)} />
-                           <button onClick={() => saveRecord(role === "teacher" ? "advice" : "question")} className={`w-full mt-2 py-3 text-white rounded-xl font-black text-xs transition-all ${role === "teacher" ? "bg-rose-600 hover:bg-rose-700" : "bg-blue-600 hover:bg-blue-700"}`}>送信</button>
+                      
+                      {/* 右：チャット＆報告タブ */}
+                      <div className="flex flex-col h-[500px] border border-slate-100 rounded-[2rem] overflow-hidden bg-slate-50 shadow-inner">
+                        {/* 内部タブ切替 */}
+                        <div className="flex bg-white border-b border-slate-100 p-2 shrink-0">
+                          <button onClick={() => setCalendarSubView("chat")} className={`flex-1 py-3 text-xs font-black rounded-xl transition-all ${calendarSubView === "chat" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:bg-slate-50"}`}>💬 チャット</button>
+                          <button onClick={() => setCalendarSubView("report")} className={`flex-1 py-3 text-xs font-black rounded-xl transition-all ${calendarSubView === "report" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:bg-slate-50"}`}>📝 授業報告</button>
                         </div>
-                        <div className="flex-1 overflow-y-auto pr-2 space-y-3 max-h-[300px] custom-scroll">
-                          {currentStudent.records?.filter((r: any) => r.date === selectedDate).length > 0 ? currentStudent.records.filter((r: any) => r.date === selectedDate).map((r: any, i: number) => (
-                              <div key={i} className={`p-4 rounded-2xl border ${r.type === "advice" ? "bg-rose-50/50 border-rose-100" : "bg-blue-50/50 border-blue-100"}`}>
-                                <p className={`text-[9px] font-black mb-1 ${r.type === "advice" ? "text-rose-400" : "text-blue-400"}`}>{r.timestamp} {r.type === "advice" ? "TEACHER" : "STUDENT"}</p>
-                                <p className="text-sm font-bold text-slate-700 whitespace-pre-wrap">{r.text}</p>
+
+                        {/* --- チャット画面 --- */}
+                        {calendarSubView === "chat" && (
+                          <div className="flex flex-col flex-1 overflow-hidden">
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scroll" ref={chatScrollRef}>
+                              {(currentStudent.messages || []).length === 0 ? (
+                                <p className="text-center text-slate-400 text-xs font-bold mt-10">メッセージはまだありません</p>
+                              ) : (
+                                currentStudent.messages.map((m: any, i: number) => {
+                                  const isMe = m.sender === role;
+                                  return (
+                                    <div key={i} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                                      <div className={`max-w-[80%] p-4 text-sm font-bold shadow-sm ${isMe ? "bg-blue-600 text-white rounded-l-2xl rounded-tr-2xl" : "bg-white text-slate-700 border border-slate-200 rounded-r-2xl rounded-tl-2xl"}`}>
+                                        {m.text}
+                                      </div>
+                                      <span className="text-[9px] text-slate-400 mt-1 px-1">{m.timestamp}</span>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                            <div className="p-4 bg-white border-t border-slate-100 flex gap-2 shrink-0">
+                              <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendMessage()} placeholder="メッセージを入力..." className="flex-1 bg-slate-100 p-3 rounded-xl text-sm font-bold outline-none" />
+                              <button onClick={sendMessage} className="px-6 bg-blue-600 text-white rounded-xl font-black text-xs hover:bg-blue-700 transition-all">送信</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* --- 授業報告画面 --- */}
+                        {calendarSubView === "report" && (
+                          <div className="flex flex-col flex-1 p-6 overflow-y-auto custom-scroll">
+                            <div className="flex items-center gap-2 mb-6">
+                              <span className="bg-slate-800 text-white px-3 py-1 rounded-lg text-xs font-black">{selectedDate}</span>
+                              <span className="text-sm font-black text-slate-600">の授業報告</span>
+                            </div>
+
+                            {role === "teacher" ? (
+                              <div className="space-y-6">
+                                <div>
+                                  <label className="text-xs font-black text-slate-600 flex items-center gap-2 mb-2">🟢 生徒・保護者向け報告 (公開)</label>
+                                  <textarea value={publicReport} onChange={e => setPublicReport(e.target.value)} placeholder="今日の学習内容や生徒へのフィードバックを入力してください。この内容は生徒・保護者も見ることができます。" className="w-full h-32 p-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-400 outline-none text-sm font-medium resize-none transition-all" />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-black text-rose-600 flex items-center gap-2 mb-2">🔴 上長向け報告 (内部専用・非公開)</label>
+                                  <textarea value={internalReport} onChange={e => setInternalReport(e.target.value)} placeholder="生徒のモチベーション低下や、クレームの兆候、業務連絡など、生徒には見せない内部メモを記入してください。" className="w-full h-32 p-4 rounded-2xl bg-rose-50 border-2 border-rose-200 focus:border-rose-400 outline-none text-sm font-medium resize-none transition-all text-rose-900 placeholder-rose-300" />
+                                </div>
+                                <button onClick={saveReport} className="w-full py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700 transition-all">この日の報告を保存する</button>
                               </div>
-                            )) : <div className="text-center text-slate-300 text-sm font-bold italic py-10">記録なし</div>}
-                        </div>
+                            ) : (
+                              <div className="space-y-4">
+                                <div className="p-6 bg-white rounded-2xl border border-slate-200 min-h-[200px] shadow-sm">
+                                  <h4 className="text-xs font-black text-slate-400 mb-4 uppercase tracking-wider border-b pb-2">先生からのメッセージ</h4>
+                                  <p className="text-sm font-bold text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                    {publicReport || "この日の報告はまだ入力されていません。"}
+                                  </p>
+                                </div>
+                                {/* 生徒には内部報告は絶対にレンダリングしない */}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
 
+                  {/* 他のタブコンテンツ（Progress, Test, Homework, Materials）はそのまま */}
                   {currentView === "progress" && (
                     <div className="animate-in fade-in">
                       <div className="flex gap-2 overflow-x-auto pb-6 no-scrollbar">
@@ -761,7 +796,6 @@ function App() {
                      </div>
                   )}
 
-                  {/* ★宿題画面を復元 */}
                   {currentView === "homework" && (
                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
                        {currentStudent.homeworks?.map((h: any, i: number) => (
