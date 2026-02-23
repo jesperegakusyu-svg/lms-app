@@ -173,6 +173,7 @@ function App() {
   });
 
   // その他UI用State
+  const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [adviceText, setAdviceText] = useState("");
   const [studentComment, setStudentComment] = useState("");
   const [viewDate, setViewDate] = useState(new Date());
@@ -190,10 +191,8 @@ function App() {
   const [newStudentGrade, setNewStudentGrade] = useState("中1");
   const [newStudentSubjects, setNewStudentSubjects] = useState<string[]>([]);
   
-  // 【講師用】科目編集モード & 固定スケジュール入力用
+  // 【講師用】科目編集モード
   const [isEditingSubjects, setIsEditingSubjects] = useState(false);
-  const [fixedDayInput, setFixedDayInput] = useState(1); // 1:月曜
-  const [fixedTimeInput, setFixedTimeInput] = useState("19:00");
 
   // 通知監視 & データ保存
   useEffect(() => {
@@ -209,7 +208,6 @@ function App() {
     setNewStudentId(generateNextId());
   }, [students]);
 
-  // 学年が変わったらデフォルトでその学年の全科目を選択状態にする
   useEffect(() => {
     if (GRADE_CURRICULUM[newStudentGrade]) {
       setNewStudentSubjects(Object.keys(GRADE_CURRICULUM[newStudentGrade]));
@@ -277,7 +275,7 @@ function App() {
       setResetId("");
       setResetEmail("");
     } else {
-      alert("IDとメールアドレスが一致するユーザーが見つかりません。");
+      alert("IDとメールアドレスが一致するユーザーが見つかりません。\n(※初回セットアップでメールアドレスを登録していない場合は利用できません)");
     }
   };
 
@@ -308,11 +306,7 @@ function App() {
       subjects: selectedSubjectsData, 
       isFirstLogin: true, 
       tests: [], mocks: [], records: [], homeworks: [], materials: [], meetingUrl: "",
-      profile: {},
-      // ★追加: 固定授業・キャンセル・予約管理用
-      fixedSchedules: [], // { dayOfWeek: 1, time: "19:00" }
-      cancellations: [],  // "2026/2/3" (キャンセルされた日付)
-      bookings: []        // { date: "2026/2/5", time: "20:00" } (振替などの単発予約)
+      profile: {}
     };
 
     setStudents({ ...students, [newStudentId]: newStudent });
@@ -342,7 +336,6 @@ function App() {
     setStudents(updated);
   };
 
-  // --- カレンダー関連ロジック（強化版） ---
   const getCalendarDays = () => {
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
@@ -354,94 +347,6 @@ function App() {
     return days;
   };
 
-  // 指定した日付のステータスを取得（固定授業？キャンセル済？予約あり？）
-  const getDayStatus = (dateStr: string | null) => {
-    if (!dateStr || !currentStudent) return null;
-    const dateObj = new Date(dateStr);
-    const dayOfWeek = dateObj.getDay(); // 0(日)~6(土)
-
-    // 1. 単発予約があるか？
-    const booking = currentStudent.bookings?.find((b: any) => b.date === dateStr);
-    if (booking) return { type: "booked", time: booking.time };
-
-    // 2. 固定授業があるか？
-    const fixed = currentStudent.fixedSchedules?.find((f: any) => f.dayOfWeek === dayOfWeek);
-    if (fixed) {
-      // 3. キャンセルされているか？
-      const isCancelled = currentStudent.cancellations?.includes(dateStr);
-      if (isCancelled) return { type: "cancelled", time: fixed.time };
-      return { type: "fixed", time: fixed.time };
-    }
-
-    return null;
-  };
-
-  // 固定スケジュールの追加
-  const addFixedSchedule = () => {
-    if (!currentStudentId) return;
-    const updated = { ...students };
-    if (!updated[currentStudentId].fixedSchedules) updated[currentStudentId].fixedSchedules = [];
-    
-    // 同じ曜日の設定があれば上書き、なければ追加
-    const existingIdx = updated[currentStudentId].fixedSchedules.findIndex((f: any) => f.dayOfWeek === Number(fixedDayInput));
-    const newSchedule = { dayOfWeek: Number(fixedDayInput), time: fixedTimeInput };
-    
-    if (existingIdx >= 0) {
-      updated[currentStudentId].fixedSchedules[existingIdx] = newSchedule;
-    } else {
-      updated[currentStudentId].fixedSchedules.push(newSchedule);
-    }
-    setStudents(updated);
-    alert("固定授業を設定しました");
-  };
-
-  // 固定スケジュールの削除
-  const removeFixedSchedule = (dayOfWeek: number) => {
-    if (!currentStudentId) return;
-    const updated = { ...students };
-    updated[currentStudentId].fixedSchedules = updated[currentStudentId].fixedSchedules.filter((f: any) => f.dayOfWeek !== dayOfWeek);
-    setStudents(updated);
-  };
-
-  // 授業のキャンセル（固定授業を特定の日だけ休みにする）
-  const cancelLesson = () => {
-    if (!currentStudentId || !selectedDate) return;
-    if (!window.confirm(`${selectedDate} の授業をキャンセルしますか？`)) return;
-    const updated = { ...students };
-    if (!updated[currentStudentId].cancellations) updated[currentStudentId].cancellations = [];
-    updated[currentStudentId].cancellations.push(selectedDate);
-    setStudents(updated);
-  };
-
-  // 授業のキャンセルを取り消す（元に戻す）
-  const restoreLesson = () => {
-    if (!currentStudentId || !selectedDate) return;
-    const updated = { ...students };
-    updated[currentStudentId].cancellations = updated[currentStudentId].cancellations.filter((d: string) => d !== selectedDate);
-    setStudents(updated);
-  };
-
-  // 単発予約（振替など）を入れる
-  const addBooking = (time: string) => {
-    if (!currentStudentId || !selectedDate) return;
-    const updated = { ...students };
-    if (!updated[currentStudentId].bookings) updated[currentStudentId].bookings = [];
-    updated[currentStudentId].bookings.push({ date: selectedDate, time });
-    setStudents(updated);
-    alert("予約を追加しました");
-  };
-
-  // 単発予約を削除
-  const removeBooking = () => {
-    if (!currentStudentId || !selectedDate) return;
-    if (!window.confirm(`${selectedDate} の予約を取り消しますか？`)) return;
-    const updated = { ...students };
-    updated[currentStudentId].bookings = updated[currentStudentId].bookings.filter((b: any) => b.date !== selectedDate);
-    setStudents(updated);
-  };
-
-  // ------------------------------------
-
   const saveRecord = (type: "advice" | "question") => {
     if (!currentStudentId) return;
     const text = type === "advice" ? adviceText : studentComment;
@@ -452,6 +357,62 @@ function App() {
     setStudents(updated);
     if (type === "advice") setAdviceText(""); else setStudentComment("");
     alert("保存しました");
+  };
+
+  // ★宿題アップロード機能（復元）
+  const handleHomeworkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && currentStudentId) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const updated = { ...students };
+        if (!updated[currentStudentId].homeworks) updated[currentStudentId].homeworks = [];
+        updated[currentStudentId].homeworks.push({ img: reader.result, date: new Date().toLocaleDateString(), timestamp: new Date().toLocaleTimeString() });
+        setStudents(updated);
+        alert("提出しました");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const addMaterial = () => {
+    if (!matTitle || !matUrl) return;
+    const updated = { ...students };
+    if (!updated[currentStudentId!].materials) updated[currentStudentId!].materials = [];
+    updated[currentStudentId!].materials.push({ title: matTitle, url: matUrl, date: new Date().toLocaleDateString(), by: role });
+    setStudents(updated);
+    setMatTitle(""); setMatUrl("");
+  };
+
+  const createTest = () => {
+    if(!testTitle) return;
+    const updated = { ...students };
+    if (!updated[currentStudentId!].tests) updated[currentStudentId!].tests = [];
+    const initialScores: any = {};
+    Object.keys(currentStudent.subjects).forEach(s => initialScores[s] = { result: 0 });
+    updated[currentStudentId!].tests.push({ title: testTitle, scores: initialScores, date: new Date().toLocaleDateString(), status: "draft" });
+    setStudents(updated);
+    setTestTitle("");
+  };
+
+  const updateTestScore = (testIdx: number, subj: string, val: number) => {
+    const updated = { ...students };
+    updated[currentStudentId!].tests[testIdx].scores[subj].result = val;
+    setStudents(updated);
+  };
+
+  const changeTestStatus = (testIdx: number, status: "pending" | "approved" | "draft") => {
+    if(status === "approved" && !window.confirm("確定すると修正できなくなります。よろしいですか？")) return;
+    const updated = { ...students };
+    updated[currentStudentId!].tests[testIdx].status = status;
+    setStudents(updated);
+  };
+
+  const updateMeetingUrl = (url: string) => {
+    if(!currentStudentId) return;
+    const updated = { ...students };
+    updated[currentStudentId].meetingUrl = url;
+    setStudents(updated);
   };
 
   const currentStudent = currentStudentId ? students[currentStudentId] : null;
@@ -477,23 +438,47 @@ function App() {
                 <input className="w-full bg-white p-3 rounded-xl font-bold outline-none border-2 border-slate-100 focus:border-slate-400" type="email" placeholder="example@email.com" value={setupData.email} onChange={e => setSetupData({...setupData, email: e.target.value})} />
               </div>
 
-              {/* 名前、性別、住所などは省略せずそのまま配置 */}
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] font-black text-slate-400 ml-2">姓</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="山田" value={setupData.lastName} onChange={e => setSetupData({...setupData, lastName: e.target.value})} /></div>
-                <div><label className="text-[10px] font-black text-slate-400 ml-2">名</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="太郎" value={setupData.firstName} onChange={e => setSetupData({...setupData, firstName: e.target.value})} /></div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 ml-2">姓 (Last Name)</label>
+                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="山田" value={setupData.lastName} onChange={e => setSetupData({...setupData, lastName: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 ml-2">名 (First Name)</label>
+                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="太郎" value={setupData.firstName} onChange={e => setSetupData({...setupData, firstName: e.target.value})} />
+                </div>
               </div>
+
               <div>
                 <label className="text-[10px] font-black text-slate-400 ml-2">性別</label>
                 <select className="w-full bg-slate-100 p-3 rounded-xl font-bold outline-none" value={setupData.gender} onChange={e => setSetupData({...setupData, gender: e.target.value})}>
-                  <option value="未回答">選択しない</option><option value="男性">男性</option><option value="女性">女性</option><option value="その他">その他</option>
+                  <option value="未回答">選択しない</option>
+                  <option value="男性">男性</option>
+                  <option value="女性">女性</option>
+                  <option value="その他">その他</option>
                 </select>
               </div>
-              <div><label className="text-[10px] font-black text-slate-400 ml-2">住所</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="例: 東京都渋谷区..." value={setupData.address} onChange={e => setSetupData({...setupData, address: e.target.value})} /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="text-[10px] font-black text-slate-400 ml-2">学校の都道府県</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="東京都" value={setupData.schoolPref} onChange={e => setSetupData({...setupData, schoolPref: e.target.value})} /></div>
-                <div><label className="text-[10px] font-black text-slate-400 ml-2">学年</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolGrade} onChange={e => setSetupData({...setupData, schoolGrade: e.target.value})} /></div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 ml-2">住所</label>
+                <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="例: 東京都渋谷区..." value={setupData.address} onChange={e => setSetupData({...setupData, address: e.target.value})} />
               </div>
-              <div><label className="text-[10px] font-black text-slate-400 ml-2">学校名</label><input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="〇〇中学校" value={setupData.schoolName} onChange={e => setSetupData({...setupData, schoolName: e.target.value})} /></div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 ml-2">学校の都道府県</label>
+                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="東京都" value={setupData.schoolPref} onChange={e => setSetupData({...setupData, schoolPref: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 ml-2">学年</label>
+                  <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" value={setupData.schoolGrade} onChange={e => setSetupData({...setupData, schoolGrade: e.target.value})} />
+                </div>
+              </div>
+              
+              <div>
+                <label className="text-[10px] font-black text-slate-400 ml-2">学校名</label>
+                <input className="w-full bg-slate-100 p-3 rounded-xl font-bold" placeholder="〇〇中学校" value={setupData.schoolName} onChange={e => setSetupData({...setupData, schoolName: e.target.value})} />
+              </div>
 
               <button onClick={handleFirstLoginSetup} className="w-full py-4 mt-6 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700 transition-all">登録してスタート！ 🚀</button>
             </div>
@@ -507,9 +492,10 @@ function App() {
            <div className="bg-white p-8 rounded-[2rem] w-full max-w-sm shadow-2xl relative animate-in fade-in zoom-in duration-300">
              <button onClick={() => setIsForgotPassword(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold">✕ 閉じる</button>
              <h3 className="text-xl font-black text-slate-800 mb-4 text-center">パスワード再発行</h3>
-             <p className="text-xs text-slate-500 mb-6 text-center">登録時のIDとメールアドレスを入力してください。</p>
+             <p className="text-xs text-slate-500 mb-6 text-center">登録時のIDとメールアドレスを入力してください。<br/>一致した場合、メールでパスワードを送信します。</p>
+             
              <div className="space-y-4">
-               <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" placeholder="ID" value={resetId} onChange={e => setResetId(e.target.value)} />
+               <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" placeholder="ID (例: 260001)" value={resetId} onChange={e => setResetId(e.target.value)} />
                <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" type="email" placeholder="メールアドレス" value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
                <button onClick={handleResetPassword} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black shadow-lg">メールを送信</button>
              </div>
@@ -528,9 +514,13 @@ function App() {
             </div>
             <input className="w-full p-4 mb-4 bg-slate-50 rounded-2xl outline-none font-bold" placeholder="ID" value={inputId} onChange={(e) => setInputId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
             <input className="w-full p-4 mb-6 bg-slate-50 rounded-2xl outline-none font-bold" type="password" placeholder="PASS" value={inputPass} onChange={(e) => setInputPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+            
             <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-white shadow-lg mb-4 ${role === "student" ? "bg-blue-600" : "bg-rose-600"}`}>LOGIN</button>
+            
             {role === "student" && (
-              <button onClick={() => setIsForgotPassword(true)} className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 underline">パスワードを忘れた方はこちら</button>
+              <button onClick={() => setIsForgotPassword(true)} className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 underline">
+                パスワードを忘れた方はこちら
+              </button>
             )}
           </div>
         </div>
@@ -552,25 +542,30 @@ function App() {
                       <div><label className="text-[10px] font-black text-slate-400 ml-2">AUTO-ID</label><input value={newStudentId} readOnly className="w-full p-4 bg-slate-100 rounded-2xl text-sm font-black text-slate-500 cursor-not-allowed" /></div>
                       <input id="nName" placeholder="生徒氏名 (仮)" className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-bold outline-none" />
                       <input id="nPass" placeholder="初期パスワード" className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-bold outline-none" />
+                      
+                      {/* 学年選択 */}
                       <select value={newStudentGrade} onChange={(e) => setNewStudentGrade(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl text-sm font-black outline-none cursor-pointer">
                         {Object.keys(GRADE_CURRICULUM).map(g => <option key={g} value={g}>{g}</option>)}
                       </select>
+
+                      {/* 科目選択 (チェックボックス) */}
                       <div className="bg-slate-50 p-4 rounded-2xl">
-                          <p className="text-[10px] font-bold text-slate-400 mb-2">受講科目を選択</p>
-                          <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto">
-                            {GRADE_CURRICULUM[newStudentGrade] && Object.keys(GRADE_CURRICULUM[newStudentGrade]).map(subj => (
-                              <label key={subj} className="flex items-center gap-2 text-xs font-bold cursor-pointer">
-                                <input type="checkbox" checked={newStudentSubjects.includes(subj)} 
-                                  onChange={e => {
-                                    if (e.target.checked) setNewStudentSubjects([...newStudentSubjects, subj]);
-                                    else setNewStudentSubjects(newStudentSubjects.filter(s => s !== subj));
-                                  }}
-                                />
-                                {subj}
-                              </label>
-                            ))}
-                          </div>
+                         <p className="text-[10px] font-bold text-slate-400 mb-2">受講科目を選択</p>
+                         <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto">
+                           {GRADE_CURRICULUM[newStudentGrade] && Object.keys(GRADE_CURRICULUM[newStudentGrade]).map(subj => (
+                             <label key={subj} className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                               <input type="checkbox" checked={newStudentSubjects.includes(subj)} 
+                                 onChange={e => {
+                                   if (e.target.checked) setNewStudentSubjects([...newStudentSubjects, subj]);
+                                   else setNewStudentSubjects(newStudentSubjects.filter(s => s !== subj));
+                                 }}
+                               />
+                               {subj}
+                             </label>
+                           ))}
+                         </div>
                       </div>
+
                       <button className="w-full mt-2 py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700" onClick={createStudent}>生徒を作成</button>
                     </div>
                   </div>
@@ -587,18 +582,23 @@ function App() {
                   <div className="relative z-10">
                     <p className="text-[10px] font-black bg-white/20 px-4 py-1.5 rounded-full inline-block uppercase tracking-widest">{currentStudent!.grade}</p>
                     <h2 className="text-3xl font-black mt-4 mb-2">{currentStudent!.name}</h2>
+                    {/* プロフィール情報の表示 */}
                     {currentStudent.profile && (
                       <div className="text-xs text-white/70 mb-6 font-bold leading-relaxed">
                         {currentStudent.profile.schoolName} {currentStudent.profile.schoolGrade}<br/>
                         {currentStudent.profile.address}
                       </div>
                     )}
+                    
                     {currentStudent.meetingUrl ? (
                       <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="block w-full py-5 bg-rose-500 hover:bg-rose-400 text-white rounded-2xl font-black text-center shadow-lg transform hover:-translate-y-1 transition-all animate-pulse mb-6 border-2 border-rose-400/50">🎥 今すぐ授業に参加</a>
                     ) : <div className="bg-white/10 p-4 rounded-xl text-center text-xs font-bold text-white/50 mb-6 border border-white/10">授業URL未設定</div>}
+                    
                     <div className="pt-8 border-t border-white/20">
                       <p className="text-[10px] font-bold opacity-60 mb-2">QUICK ACTION</p>
                       <button onClick={handleNotificationSetup} className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-purple-600 text-white rounded-2xl font-black text-xs cursor-pointer hover:bg-purple-50 shadow-lg transition-all">🔔 通知を受け取る設定</button>
+                      {/* ★宿題提出ボタン（復元） */}
+                      <label className="flex items-center justify-center gap-2 w-full py-4 bg-white text-blue-600 rounded-2xl font-black text-xs cursor-pointer hover:bg-blue-50 shadow-lg">📸 宿題を提出<input type="file" accept="image/*" className="hidden" onChange={handleHomeworkUpload} /></label>
                     </div>
                   </div>
                   <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-indigo-500 rounded-full blur-3xl opacity-50"></div>
@@ -611,7 +611,7 @@ function App() {
               {currentStudent ? (
                 <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100">
                   
-                  {/* 講師用：生徒管理パネル */}
+                  {/* 講師用：生徒管理パネル（科目の編集など） */}
                   {role === "teacher" && (
                     <div className="mb-8">
                       <div className="p-6 bg-slate-800 rounded-[2rem] text-white shadow-lg mb-4">
@@ -627,47 +627,29 @@ function App() {
                         </div>
                       </div>
                       
+                      {/* プロフィール詳細表示 */}
                       <div className="flex justify-between items-start bg-slate-50 p-6 rounded-2xl border border-slate-100">
                         <div className="text-xs font-bold text-slate-600 space-y-1">
-                          <p><span className="text-slate-400">氏名:</span> {currentStudent.profile?.lastName} {currentStudent.profile?.firstName}</p>
+                          <p><span className="text-slate-400">氏名:</span> {currentStudent.profile?.lastName} {currentStudent.profile?.firstName} ({currentStudent.profile?.gender})</p>
                           <p><span className="text-slate-400">Email:</span> {currentStudent.profile?.email || "未登録"}</p>
+                          <p><span className="text-slate-400">住所:</span> {currentStudent.profile?.address}</p>
+                          <p><span className="text-slate-400">学校:</span> {currentStudent.profile?.schoolPref} {currentStudent.profile?.schoolName} ({currentStudent.profile?.schoolGrade})</p>
                         </div>
                         <button onClick={() => setIsEditingSubjects(!isEditingSubjects)} className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-black text-slate-500 hover:bg-slate-100">
-                          {isEditingSubjects ? "編集を終了" : "科目・日程を編集"}
+                          {isEditingSubjects ? "編集を終了" : "科目を設定変更"}
                         </button>
                       </div>
 
-                      {/* 科目・日程編集エリア */}
+                      {/* 科目編集エリア */}
                       {isEditingSubjects && (
                         <div className="mt-4 p-6 bg-yellow-50 rounded-2xl border border-yellow-200 animate-in fade-in">
-                          <h4 className="font-black text-yellow-600 mb-4">履修科目の変更</h4>
-                          <div className="flex flex-wrap gap-3 mb-6">
+                          <h4 className="font-black text-yellow-600 mb-4">履修科目の変更 (リアルタイム反映)</h4>
+                          <div className="flex flex-wrap gap-3">
                             {GRADE_CURRICULUM[currentStudent.grade] && Object.keys(GRADE_CURRICULUM[currentStudent.grade]).map(subj => (
                               <button key={subj} onClick={() => toggleSubject(subj)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${currentStudent.subjects[subj] ? "bg-blue-600 text-white shadow-md" : "bg-white text-slate-400 border border-slate-200"}`}>
                                 {currentStudent.subjects[subj] ? "✅ " : "+ "} {subj}
                               </button>
                             ))}
-                          </div>
-
-                          {/* ★追加機能：固定スケジュール設定 */}
-                          <div className="pt-6 border-t border-yellow-200/50">
-                            <h4 className="font-black text-yellow-600 mb-4">📅 固定授業の設定 (毎週)</h4>
-                            <div className="flex gap-2 mb-4">
-                              <select className="p-3 rounded-xl text-xs font-bold border-none outline-none" value={fixedDayInput} onChange={e => setFixedDayInput(Number(e.target.value))}>
-                                {["日","月","火","水","木","金","土"].map((d,i) => <option key={i} value={i}>{d}曜</option>)}
-                              </select>
-                              <input type="time" className="p-3 rounded-xl text-xs font-bold border-none outline-none" value={fixedTimeInput} onChange={e => setFixedTimeInput(e.target.value)} />
-                              <button onClick={addFixedSchedule} className="bg-yellow-600 text-white px-5 rounded-xl text-xs font-black hover:bg-yellow-700">追加 / 更新</button>
-                            </div>
-                            <div className="flex gap-2 flex-wrap">
-                              {currentStudent.fixedSchedules?.map((f: any, i: number) => (
-                                <div key={i} className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg text-xs font-bold text-slate-600 shadow-sm">
-                                  <span>{["日","月","火","水","木","金","土"][f.dayOfWeek]}曜 {f.time}</span>
-                                  <button onClick={() => removeFixedSchedule(f.dayOfWeek)} className="text-red-400 hover:text-red-600">×</button>
-                                </div>
-                              ))}
-                              {!currentStudent.fixedSchedules?.length && <span className="text-xs text-slate-400 font-bold">固定授業なし</span>}
-                            </div>
                           </div>
                         </div>
                       )}
@@ -675,12 +657,13 @@ function App() {
                   )}
 
                   <div className="flex flex-wrap gap-2 mb-8 bg-slate-100 p-1.5 rounded-2xl w-fit">
-                    {[{ k: "calendar", l: "📅 CALENDAR" }, { k: "progress", l: "📊 PROGRESS" }, { k: "test", l: "📝 TESTS" }, { k: "materials", l: "📚 MATERIALS" }].map((tab) => (
+                    {/* ★HOMEWORKタブを復元 */}
+                    {[{ k: "calendar", l: "📅 CALENDAR" }, { k: "progress", l: "📊 PROGRESS" }, { k: "test", l: "📝 TESTS" }, { k: "homework", l: "🏠 HOMEWORK" }, { k: "materials", l: "📚 MATERIALS" }].map((tab) => (
                       <button key={tab.k} onClick={() => setCurrentView(tab.k as any)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all ${currentView === tab.k ? "bg-white text-slate-800 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>{tab.l}</button>
                     ))}
                   </div>
 
-                  {/* --- カレンダービュー (機能強化) --- */}
+                  {/* 各ビューの表示 */}
                   {currentView === "calendar" && (
                     <div className="grid md:grid-cols-2 gap-10 animate-in fade-in">
                       <div>
@@ -689,74 +672,14 @@ function App() {
                           <div className="flex gap-2"><button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() - 1)))} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-lg text-xs">◀</button><button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() + 1)))} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-lg text-xs">▶</button></div>
                         </div>
                         <div className="grid grid-cols-7 gap-2">
-                          {["SUN","MON","TUE","WED","THU","FRI","SAT"].map(d => <div key={d} className="text-center text-[8px] font-black text-slate-300 mb-1">{d}</div>)}
                           {getCalendarDays().map((date, i) => {
-                             const status = getDayStatus(date);
                              const hasRecord = date && currentStudent.records?.some((r: any) => r.date === date);
-                             return (
-                               <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative transition-all flex items-center justify-center ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>
-                                 {date ? date.split("/")[2] : ""}
-                                 {/* 固定授業 or 予約アイコン */}
-                                 {status?.type === "fixed" && <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full"></span>}
-                                 {status?.type === "booked" && <span className="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full"></span>}
-                                 {status?.type === "cancelled" && <span className="absolute top-1 right-1 text-[8px]">❌</span>}
-                                 {/* レポートありマーク */}
-                                 {hasRecord && <span className={`absolute bottom-2 w-1 h-1 rounded-full ${selectedDate === date ? "bg-white/50" : "bg-green-400"}`}></span>}
-                               </button>
-                             );
+                             return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative transition-all ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasRecord && <span className={`w-1.5 h-1.5 rounded-full absolute bottom-2 ${selectedDate === date ? "bg-white" : "bg-green-400"}`} />}</button>;
                           })}
                         </div>
-                        
-                        {/* 凡例 */}
-                        <div className="flex gap-3 mt-4 justify-center">
-                           <div className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded-full"></span><span className="text-[9px] font-bold text-slate-400">固定授業</span></div>
-                           <div className="flex items-center gap-1"><span className="w-2 h-2 bg-blue-500 rounded-full"></span><span className="text-[9px] font-bold text-slate-400">単発/振替</span></div>
-                           <div className="flex items-center gap-1"><span className="text-[9px]">❌</span><span className="text-[9px] font-bold text-slate-400">キャンセル</span></div>
-                        </div>
                       </div>
-
                       <div className="flex flex-col h-full">
                         <div className="pb-4 border-b border-slate-100 mb-4"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">DATE</p><h4 className="text-2xl font-black text-slate-800">{selectedDate}</h4></div>
-                        
-                        {/* --- ★追加機能: 授業予約・キャンセルパネル --- */}
-                        <div className="mb-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                           {(() => {
-                              const s = getDayStatus(selectedDate);
-                              if (s?.type === "fixed") {
-                                return (
-                                  <div className="flex justify-between items-center">
-                                     <div><span className="badge bg-rose-500 text-white text-[10px] px-2 py-1 rounded-md font-bold">固定授業</span> <span className="text-sm font-bold ml-1">{s.time}〜</span></div>
-                                     <button onClick={cancelLesson} className="text-[10px] font-bold text-red-500 hover:text-red-700 bg-white border border-red-100 px-3 py-1.5 rounded-lg shadow-sm">キャンセルする</button>
-                                  </div>
-                                );
-                              } else if (s?.type === "cancelled") {
-                                return (
-                                  <div className="flex justify-between items-center">
-                                     <div><span className="badge bg-slate-400 text-white text-[10px] px-2 py-1 rounded-md font-bold">お休み</span> <span className="text-xs text-slate-400 ml-1 font-bold line-through">{s.time}〜</span></div>
-                                     <button onClick={restoreLesson} className="text-[10px] font-bold text-blue-500 hover:text-blue-700 bg-white border border-blue-100 px-3 py-1.5 rounded-lg shadow-sm">元に戻す</button>
-                                  </div>
-                                );
-                              } else if (s?.type === "booked") {
-                                return (
-                                  <div className="flex justify-between items-center">
-                                     <div><span className="badge bg-blue-500 text-white text-[10px] px-2 py-1 rounded-md font-bold">予約あり</span> <span className="text-sm font-bold ml-1">{s.time}〜</span></div>
-                                     <button onClick={removeBooking} className="text-[10px] font-bold text-slate-400 hover:text-slate-600 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">取り消し</button>
-                                  </div>
-                                );
-                              } else {
-                                return (
-                                  <div className="flex items-center gap-2">
-                                     <span className="text-xs font-bold text-slate-400">予定なし</span>
-                                     <div className="flex-1 flex gap-2 justify-end">
-                                       <select id="bookingTime" className="p-1 text-xs rounded border-none font-bold bg-white text-slate-600"><option>10:00</option><option>13:00</option><option>15:00</option><option>17:00</option><option>19:00</option><option>20:00</option><option>21:00</option></select>
-                                       <button onClick={() => addBooking((document.getElementById("bookingTime") as HTMLSelectElement).value)} className="text-[10px] font-bold bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow-sm hover:bg-blue-700">＋ 予約を入れる</button>
-                                     </div>
-                                  </div>
-                                );
-                              }
-                           })()}
-                        </div>
-
                         <div className="mb-6">
                            <textarea className={`w-full h-20 p-4 rounded-2xl border-none outline-none text-sm font-medium focus:ring-2 transition-all resize-none ${role === "teacher" ? "bg-rose-50 focus:ring-rose-200" : "bg-blue-50 focus:ring-blue-200"}`} placeholder={role === "teacher" ? "授業記録..." : "質問・振り返り..."} value={role === "teacher" ? adviceText : studentComment} onChange={(e) => role === "teacher" ? setAdviceText(e.target.value) : setStudentComment(e.target.value)} />
                            <button onClick={() => saveRecord(role === "teacher" ? "advice" : "question")} className={`w-full mt-2 py-3 text-white rounded-xl font-black text-xs transition-all ${role === "teacher" ? "bg-rose-600 hover:bg-rose-700" : "bg-blue-600 hover:bg-blue-700"}`}>送信</button>
@@ -799,18 +722,75 @@ function App() {
                          <div className="flex justify-between items-center mb-4"><h4 className="text-xs font-black text-slate-400 uppercase">Score Trend</h4><select className="p-2 rounded-lg text-xs font-bold bg-white border-none" value={graphSubject} onChange={(e) => setGraphSubject(e.target.value)}>{Object.keys(currentStudent.subjects).map(s => <option key={s} value={s}>{s}</option>)}</select></div>
                          {currentStudent.tests?.some((t:any) => t.status === "approved") ? <SimpleLineChart data={currentStudent.tests.filter((t:any) => t.status === "approved").map((t:any) => Number(t.scores[graphSubject]?.result || 0))} color="#e11d48" /> : <div className="text-center text-xs text-slate-300 py-10 font-bold">データ不足</div>}
                        </div>
-                       <div className="space-y-4">{currentStudent.tests?.map((t: any, i: number) => ( <div key={i} className="p-6 rounded-2xl border bg-white"><p className="font-bold">{t.title}</p></div> ))}</div>
+                       {role === "student" && (
+                         <div className="p-6 bg-white border-2 border-slate-100 rounded-2xl mb-6">
+                           <div className="flex gap-2 mb-4">
+                             <input placeholder="新しいテスト名 (例: 2学期中間)" className="flex-1 p-3 rounded-xl bg-slate-50 text-sm outline-none" value={testTitle} onChange={(e) => setTestTitle(e.target.value)} />
+                             <button onClick={createTest} className="px-6 bg-blue-600 text-white rounded-xl font-black text-xs hover:bg-blue-700">作成</button>
+                           </div>
+                         </div>
+                       )}
+                       <div className="space-y-4">
+                         {currentStudent.tests?.map((t: any, i: number) => (
+                           <div key={i} className={`p-6 rounded-2xl border-2 transition-all ${t.status === "approved" ? "bg-emerald-50 border-emerald-100" : t.status === "pending" ? "bg-yellow-50 border-yellow-100" : "bg-white border-slate-100"}`}>
+                             <div className="flex justify-between items-center mb-4">
+                               <div>
+                                 <p className="font-black text-slate-800">{t.title}</p>
+                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${t.status === "approved" ? "bg-emerald-200 text-emerald-700" : t.status === "pending" ? "bg-yellow-200 text-yellow-700" : "bg-slate-200 text-slate-500"}`}>
+                                   {t.status === "approved" ? "確定済み" : t.status === "pending" ? "承認待ち" : "編集中"}
+                                 </span>
+                               </div>
+                               <div className="flex gap-2">
+                                 {role === "student" && t.status === "draft" && <button onClick={() => changeTestStatus(i, "pending")} className="px-4 py-2 bg-yellow-400 text-white rounded-lg text-xs font-black">提出する</button>}
+                                 {role === "teacher" && t.status === "pending" && <button onClick={() => changeTestStatus(i, "approved")} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-xs font-black">確定(ロック)</button>}
+                                 {role === "teacher" && t.status === "approved" && <button onClick={() => changeTestStatus(i, "draft")} className="px-4 py-2 bg-slate-400 text-white rounded-lg text-xs font-black">ロック解除</button>}
+                               </div>
+                             </div>
+                             <div className="grid grid-cols-4 gap-4">
+                               {Object.keys(currentStudent.subjects).map(subj => (
+                                 <div key={subj}>
+                                   <p className="text-[10px] font-bold text-slate-400 mb-1">{subj}</p>
+                                   <input type="number" disabled={t.status === "approved" || (role === "teacher" && t.status === "draft")} value={t.scores[subj]?.result || 0} onChange={(e) => updateTestScore(i, subj, Number(e.target.value))} className="w-full p-2 rounded-lg bg-white/50 border border-slate-200 text-center font-bold disabled:opacity-50" />
+                                 </div>
+                               ))}
+                             </div>
+                           </div>
+                         )).reverse()}
+                       </div>
                      </div>
                   )}
-                  
+
+                  {/* ★宿題画面を復元 */}
+                  {currentView === "homework" && (
+                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in">
+                       {currentStudent.homeworks?.map((h: any, i: number) => (
+                         <div key={i} className="group relative aspect-square bg-slate-100 rounded-2xl overflow-hidden cursor-zoom-in" onClick={() => setPreviewImg(h.img)}>
+                           <img src={h.img} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                           <div className="absolute bottom-0 left-0 right-0 bg-black/50 p-2 text-[9px] text-white font-bold backdrop-blur-sm">{h.date}</div>
+                         </div>
+                       ))}
+                       {role === "student" && <label className="aspect-square border-3 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-all group"><span className="text-4xl text-slate-300 group-hover:text-blue-400 mb-2">+</span><span className="text-xs font-bold text-slate-400 group-hover:text-blue-500">提出</span><input type="file" accept="image/*" className="hidden" onChange={handleHomeworkUpload} /></label>}
+                     </div>
+                  )}
+
                   {currentView === "materials" && (
                     <div className="space-y-6 animate-in fade-in">
                       <div className={`p-6 rounded-2xl flex gap-2 ${role === "teacher" ? "bg-indigo-50" : "bg-blue-50"}`}>
                         <input placeholder="教材タイトル" className="flex-1 p-3 rounded-xl border-none text-sm outline-none" value={matTitle} onChange={(e) => setMatTitle(e.target.value)} />
                         <input placeholder="URL" className="flex-1 p-3 rounded-xl border-none text-sm outline-none" value={matUrl} onChange={(e) => setMatUrl(e.target.value)} />
-                        <button onClick={() => { if(!matTitle || !matUrl) return; const u = {...students}; if(!u[currentStudentId!].materials) u[currentStudentId!].materials = []; u[currentStudentId!].materials.push({title: matTitle, url: matUrl, date: new Date().toLocaleDateString(), by: role}); setStudents(u); setMatTitle(""); setMatUrl(""); }} className={`px-6 text-white rounded-xl font-black text-xs ${role === "teacher" ? "bg-indigo-600" : "bg-blue-600"}`}>追加</button>
+                        <button onClick={addMaterial} className={`px-6 text-white rounded-xl font-black text-xs ${role === "teacher" ? "bg-indigo-600" : "bg-blue-600"}`}>追加</button>
                       </div>
-                      <div className="grid gap-3">{currentStudent.materials?.map((m: any, i: number) => (<a key={i} href={m.url} target="_blank" rel="noreferrer" className="block p-5 border rounded-2xl shadow-sm hover:shadow-md transition-all">🔗 {m.title}</a>))}</div>
+                      <div className="grid gap-3">
+                        {currentStudent.materials?.map((m: any, i: number) => (
+                          <a key={i} href={m.url} target="_blank" rel="noreferrer" className={`block p-5 border rounded-2xl shadow-sm hover:shadow-md transition-all flex justify-between items-center group ${m.by === "teacher" ? "bg-indigo-50/30 border-indigo-100" : "bg-white border-slate-100"}`}>
+                            <div>
+                              <p className={`font-bold transition-colors ${m.by === "teacher" ? "text-indigo-700" : "text-slate-700"}`}>🔗 {m.title}</p>
+                              <p className="text-[10px] text-slate-400">{m.date} by {m.by === "teacher" ? "先生" : "生徒"}</p>
+                            </div>
+                            <span className="text-slate-300 group-hover:translate-x-1 transition-transform">→</span>
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -821,6 +801,10 @@ function App() {
         </div>
       )}
 
+      {/* 画像プレビュー用モーダル */}
+      {previewImg && <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-8 backdrop-blur-md cursor-zoom-out" onClick={() => setPreviewImg(null)}><img src={previewImg} className="max-w-full max-h-full rounded-lg shadow-2xl" /></div>}
+      
+      {/* スクロールバー非表示用CSS */}
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; } .custom-scroll::-webkit-scrollbar { width: 4px; } .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }`}</style>
     </div>
   );
