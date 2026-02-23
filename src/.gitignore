@@ -1,0 +1,7 @@
+# 秘密情報を隠す
+.env
+
+# 不要なファイルを隠す
+node_modules
+build
+.DS_Store
