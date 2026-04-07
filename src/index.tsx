@@ -3,8 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './style.css'; 
 import { initializeApp } from "firebase/app";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
-// ★【追加】Firestore（バックアップ用）の機能をインポート
-import { getFirestore, doc, setDoc } from "firebase/firestore"; 
+import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore"; // ★onSnapshotを追加
 
 // ==========================================
 // 1. Firebase の設定エリア
@@ -20,11 +19,9 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-
-// ★【追加】データベース(db)を使えるように準備
 const db = getFirestore(app);
-
 let messaging: any = null;
+
 try {
   if (typeof window !== "undefined") {
     messaging = getMessaging(app);
@@ -146,10 +143,9 @@ const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => 
 // 3. アプリケーション本体
 // ==========================================
 function App() {
-  const [students, setStudents] = useState(() => {
-    const saved = localStorage.getItem("lms_v20_data");
-    return saved ? JSON.parse(saved) : {};
-  });
+  // ★変更点：ローカルストレージの読み込みを廃止
+  const [students, setStudents] = useState<any>({});
+  const [isDataLoaded, setIsDataLoaded] = useState(false); // クラウド通信完了フラグ
 
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState<"student" | "teacher">("student");
@@ -185,43 +181,67 @@ function App() {
   const [newStudentSubjects, setNewStudentSubjects] = useState<string[]>([]);
   const [isEditingSubjects, setIsEditingSubjects] = useState(false);
 
-  // チャット・報告用
   const [calendarSubView, setCalendarSubView] = useState<"chat" | "report">("chat");
   const [chatInput, setChatInput] = useState("");
   const [publicReport, setPublicReport] = useState("");
   const [internalReport, setInternalReport] = useState("");
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+
   // ====================================================
-  // ★ 追加：自動バックアップ機能 (Time Machine)
+  // ★ 追加：クラウド（Firestore）とのリアルタイム同期
   // ====================================================
+  
+  // 1. クラウドのデータを見張る（誰かが更新したら自動で画面が変わる）
+  useEffect(() => {
+    const docRef = doc(db, "lms_system", "main_data");
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setStudents(docSnap.data().students || {});
+      } else {
+        setStudents({});
+      }
+      setIsDataLoaded(true); // 読み込み完了！
+    }, (error) => {
+      console.error("クラウドの読み込みエラー:", error);
+      setIsDataLoaded(true); // エラーでも一応画面は出す
+    });
+
+    return () => unsubscribe(); // 画面を閉じた時は見張りをやめる
+  }, []);
+
+  // 2. クラウドにデータを書き込む「魔法の関数」
+  // （これまでの setStudents の代わりにこれを使います）
+  const updateStudentsData = async (newStudents: any) => {
+    setStudents(newStudents); // 画面を即座に更新してサクサク感を維持
+    try {
+      await setDoc(doc(db, "lms_system", "main_data"), { students: newStudents }, { merge: true });
+    } catch (e) {
+      console.error("クラウド保存エラー:", e);
+      alert("通信環境が不安定なため、保存に失敗しました。");
+    }
+  };
+
+  // 3. 自動バックアップ機能 (Time Machine)
   const checkAndCreateBackup = async (currentData: any) => {
     if (!currentData || Object.keys(currentData).length === 0) return;
 
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
-    
-    // 1. 最後にバックアップした日を確認
     const lastBackupDate = localStorage.getItem("lms_last_auto_backup");
-    
-    // 2. 1週間 (7日) 経過しているかチェック
     const oneWeekInMs = 7 * 24 * 60 * 60 * 1000;
     const shouldBackup = !lastBackupDate || (today.getTime() - new Date(lastBackupDate).getTime() > oneWeekInMs);
 
     if (shouldBackup) {
       try {
         console.log("⏳ 自動バックアップを作成中...");
-        // Firestoreの "backups" に日付つきで保存
         await setDoc(doc(db, "backups", todayStr), { 
           data: currentData,
           createdAt: new Date().toISOString()
         });
-
-        // バックアップ完了日を記録
         localStorage.setItem("lms_last_auto_backup", todayStr);
         console.log(`✅ バックアップ完了: backups/${todayStr}`);
-        alert(`【自動バックアップ】\n前回の保存から1週間経過したため、\n${todayStr} のバックアップをクラウドに作成しました。`);
-        
+        alert(`【自動バックアップ】\n前回の保存から1週間経過したため、\n${todayStr} のクラウドバックアップを作成しました。`);
       } catch (e) {
         console.error("バックアップ作成失敗:", e);
       }
@@ -229,13 +249,11 @@ function App() {
   };
 
   useEffect(() => {
-    // 講師がログインしていて、生徒データがある場合のみバックアップチェック
     if (role === "teacher" && Object.keys(students).length > 0) {
       checkAndCreateBackup(students);
     }
   }, [students, role]);
   // ====================================================
-
 
   useEffect(() => {
     onMessageListener()
@@ -245,10 +263,12 @@ function App() {
       .catch((err) => console.log(err));
   }, []);
 
+  // IDの自動生成（データが読み込まれてから実行）
   useEffect(() => {
-    localStorage.setItem("lms_v20_data", JSON.stringify(students));
-    setNewStudentId(generateNextId());
-  }, [students]);
+    if (isDataLoaded) {
+      setNewStudentId(generateNextId());
+    }
+  }, [students, isDataLoaded]);
 
   useEffect(() => {
     if (GRADE_CURRICULUM[newStudentGrade]) {
@@ -280,6 +300,8 @@ function App() {
     const lastNum = Math.max(...existingIds.map(id => parseInt(id.slice(2))));
     return `${yearPrefix}${(lastNum + 1).toString().padStart(4, "0")}`;
   };
+
+  // --- 以降の更新処理はすべて updateStudentsData を使用 ---
 
   const handleLogin = () => {
     if (role === "student") {
@@ -314,7 +336,9 @@ function App() {
     s.name = `${lastName} ${firstName}`; 
     s.profile = { lastName, firstName, email, gender, address, schoolPref, schoolName, schoolGrade };
     s.isFirstLogin = false; 
-    setStudents(updated);
+    
+    updateStudentsData(updated); // ★クラウド保存
+    
     setIsFirstLoginSetup(false);
     setLoggedIn(true);
     setSubject(Object.keys(s.subjects)[0] || "");
@@ -357,12 +381,11 @@ function App() {
       name, password: pass, grade: newStudentGrade, subjects: selectedSubjectsData, 
       isFirstLogin: true, 
       tests: [], mocks: [], records: [], homeworks: [], materials: [], meetingUrl: "",
-      profile: {},
-      messages: [],
-      reports: [] 
+      profile: {}, messages: [], reports: [] 
     };
 
-    setStudents({ ...students, [newStudentId]: newStudent });
+    updateStudentsData({ ...students, [newStudentId]: newStudent }); // ★クラウド保存
+    
     alert(`ID: ${newStudentId} 登録完了`);
     (document.getElementById("nName") as HTMLInputElement).value = ""; 
     (document.getElementById("nPass") as HTMLInputElement).value = ""; 
@@ -385,7 +408,7 @@ function App() {
         s.subjects[subjName] = [{ unit: "自由学習", progress: 0 }];
       }
     }
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
   };
 
   const getCalendarDays = () => {
@@ -412,7 +435,8 @@ function App() {
       text: chatInput,
       timestamp: timeString
     });
-    setStudents(updated);
+    
+    updateStudentsData(updated); // ★クラウド保存
     setChatInput("");
   };
 
@@ -432,7 +456,8 @@ function App() {
         internal: internalReport
       });
     }
-    setStudents(updated);
+    
+    updateStudentsData(updated); // ★クラウド保存
     alert("授業報告を保存しました");
   };
 
@@ -444,7 +469,7 @@ function App() {
         const updated = { ...students };
         if (!updated[currentStudentId].homeworks) updated[currentStudentId].homeworks = [];
         updated[currentStudentId].homeworks.push({ img: reader.result, date: new Date().toLocaleDateString(), timestamp: new Date().toLocaleTimeString() });
-        setStudents(updated);
+        updateStudentsData(updated); // ★クラウド保存
         alert("提出しました");
       };
       reader.readAsDataURL(file);
@@ -456,7 +481,7 @@ function App() {
     const updated = { ...students };
     if (!updated[currentStudentId!].materials) updated[currentStudentId!].materials = [];
     updated[currentStudentId!].materials.push({ title: matTitle, url: matUrl, date: new Date().toLocaleDateString(), by: role });
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
     setMatTitle(""); setMatUrl("");
   };
 
@@ -467,29 +492,37 @@ function App() {
     const initialScores: any = {};
     Object.keys(currentStudent.subjects).forEach(s => initialScores[s] = { result: 0 });
     updated[currentStudentId!].tests.push({ title: testTitle, scores: initialScores, date: new Date().toLocaleDateString(), status: "draft" });
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
     setTestTitle("");
   };
 
   const updateTestScore = (testIdx: number, subj: string, val: number) => {
     const updated = { ...students };
     updated[currentStudentId!].tests[testIdx].scores[subj].result = val;
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
   };
 
   const changeTestStatus = (testIdx: number, status: "pending" | "approved" | "draft") => {
     if(status === "approved" && !window.confirm("確定すると修正できなくなります。よろしいですか？")) return;
     const updated = { ...students };
     updated[currentStudentId!].tests[testIdx].status = status;
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
   };
 
   const updateMeetingUrl = (url: string) => {
     if(!currentStudentId) return;
     const updated = { ...students };
     updated[currentStudentId].meetingUrl = url;
-    setStudents(updated);
+    updateStudentsData(updated); // ★クラウド保存
   };
+
+  // まだクラウドからデータが届いていない場合のローディング画面
+  if (!isDataLoaded) {
+    return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F8FAFC] text-slate-400 font-bold">
+      <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+      Loading Database...
+    </div>;
+  }
 
   const currentStudent = currentStudentId ? students[currentStudentId] : null;
 
@@ -567,6 +600,7 @@ function App() {
           </header>
 
           <div className="grid lg:grid-cols-12 gap-8">
+            {/* 左カラム */}
             <div className="lg:col-span-4 space-y-6">
               {role === "teacher" ? (
                 <>
@@ -625,6 +659,7 @@ function App() {
               )}
             </div>
 
+            {/* 右カラム */}
             <div className="lg:col-span-8">
               {currentStudent ? (
                 <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100 flex flex-col">
@@ -637,7 +672,7 @@ function App() {
                               <label className="text-[10px] font-bold text-slate-400 mb-2 block uppercase tracking-wider">オンライン授業 URL</label>
                               <div className="flex items-center gap-2 bg-slate-700 p-2 rounded-xl border border-slate-600">
                                 <span className="text-xl pl-2">🔗</span>
-                                <input type="text" value={currentStudent.meetingUrl || ""} onChange={(e) => {const u = {...students}; u[currentStudentId!].meetingUrl = e.target.value; setStudents(u)}} placeholder="https://zoom.us/..." className="w-full bg-transparent border-none outline-none text-sm font-bold text-white" />
+                                <input type="text" value={currentStudent.meetingUrl || ""} onChange={(e) => {const u = {...students}; u[currentStudentId!].meetingUrl = e.target.value; updateStudentsData(u)}} placeholder="https://zoom.us/..." className="w-full bg-transparent border-none outline-none text-sm font-bold text-white" />
                               </div>
                            </div>
                            {currentStudent.meetingUrl && <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="px-6 py-4 bg-rose-500 text-white rounded-xl font-black text-xs">入室</a>}
@@ -733,11 +768,11 @@ function App() {
                               <div className="space-y-6">
                                 <div>
                                   <label className="text-xs font-black text-slate-600 flex items-center gap-2 mb-2">🟢 生徒・保護者向け報告 (公開)</label>
-                                  <textarea value={publicReport} onChange={e => setPublicReport(e.target.value)} placeholder="今日の学習内容や生徒へのフィードバックを入力してください。この内容は生徒・保護者も見ることができます。" className="w-full h-32 p-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-400 outline-none text-sm font-medium resize-none transition-all" />
+                                  <textarea value={publicReport} onChange={e => setPublicReport(e.target.value)} placeholder="今日の学習内容や生徒へのフィードバックを入力してください。" className="w-full h-32 p-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-400 outline-none text-sm font-medium resize-none transition-all" />
                                 </div>
                                 <div>
                                   <label className="text-xs font-black text-rose-600 flex items-center gap-2 mb-2">🔴 上長向け報告 (内部専用・非公開)</label>
-                                  <textarea value={internalReport} onChange={e => setInternalReport(e.target.value)} placeholder="生徒のモチベーション低下や、クレームの兆候、業務連絡など、生徒には見せない内部メモを記入してください。" className="w-full h-32 p-4 rounded-2xl bg-rose-50 border-2 border-rose-200 focus:border-rose-400 outline-none text-sm font-medium resize-none transition-all text-rose-900 placeholder-rose-300" />
+                                  <textarea value={internalReport} onChange={e => setInternalReport(e.target.value)} placeholder="生徒には見せない内部メモを記入してください。" className="w-full h-32 p-4 rounded-2xl bg-rose-50 border-2 border-rose-200 focus:border-rose-400 outline-none text-sm font-medium resize-none transition-all text-rose-900 placeholder-rose-300" />
                                 </div>
                                 <button onClick={saveReport} className="w-full py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-700 transition-all">この日の報告を保存する</button>
                               </div>
@@ -769,7 +804,7 @@ function App() {
                           {currentStudent.subjects[subject].map((r: any, i: number) => (
                             <div key={i} className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
                               <div className="flex justify-between items-end mb-3"><span className="text-xs font-bold text-slate-500">{r.unit}</span><span className="text-xl font-black text-blue-600">{r.progress}%</span></div>
-                              <input type="range" min="0" max="100" step="10" value={r.progress} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" onChange={(e) => { if (role === "student") return; const updated = { ...students }; updated[currentStudentId!].subjects[subject][i].progress = Number(e.target.value); setStudents(updated); }} disabled={role === "student"} />
+                              <input type="range" min="0" max="100" step="10" value={r.progress} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" onChange={(e) => { if (role === "student") return; const updated = { ...students }; updated[currentStudentId!].subjects[subject][i].progress = Number(e.target.value); updateStudentsData(updated); }} disabled={role === "student"} />
                             </div>
                           ))}
                         </div>
