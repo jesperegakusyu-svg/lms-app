@@ -4,6 +4,7 @@ import './style.css';
 import { initializeApp } from "firebase/app";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore"; 
+import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
 
 // ==========================================
 // 1. Firebase の設定エリア
@@ -20,12 +21,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
 let messaging: any = null;
 
 try {
-  if (typeof window !== "undefined") {
-    messaging = getMessaging(app);
-  }
+  if (typeof window !== "undefined") messaging = getMessaging(app);
 } catch (error) {
   console.log("通知機能が無効です:", error);
 }
@@ -33,24 +33,14 @@ try {
 const requestForToken = async () => {
   if (!messaging) return null;
   try {
-    const currentToken = await getToken(messaging, {
-      vapidKey: "BCyRh6AUsUP01FUl-UO27y8LDkbEXsnf-tgQUYISQIHo4YCY8RZ5wBfE0KbSiokAitEfauyDwYoNKwvnanythNI",
-    });
+    const currentToken = await getToken(messaging, { vapidKey: "BCyRh6AUsUP01FUl-UO27y8LDkbEXsnf-tgQUYISQIHo4YCY8RZ5wBfE0KbSiokAitEfauyDwYoNKwvnanythNI" });
     return currentToken || null;
   } catch (err) {
-    console.log("Token error:", err);
     return null;
   }
 };
 
-const onMessageListener = () =>
-  new Promise((resolve) => {
-    if (messaging) {
-      onMessage(messaging, (payload) => {
-        resolve(payload);
-      });
-    }
-  });
+const onMessageListener = () => new Promise((resolve) => { if (messaging) onMessage(messaging, (payload) => resolve(payload)); });
 
 // ==========================================
 // 2. データ定義 & ユーティリティ
@@ -65,16 +55,9 @@ const GRADE_CURRICULUM: any = {
 };
 
 const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => {
-  if (!data || data.length < 2) return <div className="text-center text-xs text-slate-300 py-4">データが不足しています</div>;
-  const height = 100;
-  const width = 300;
-  const maxVal = 100;
-  const points = data.map((val, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - (val / maxVal) * height;
-    return `${x},${y}`;
-  }).join(" ");
-
+  if (!data || data.length < 2) return <div className="text-center text-xs text-slate-300 py-4">データ不足</div>;
+  const height = 100; const width = 300; const maxVal = 100;
+  const points = data.map((val, i) => `${(i / (data.length - 1)) * width},${height - (val / maxVal) * height}`).join(" ");
   return (
     <div className="w-full h-32 mb-4">
       <svg viewBox={`0 -10 ${width} ${height + 20}`} className="w-full h-full overflow-visible">
@@ -82,16 +65,12 @@ const SimpleLineChart = ({ data, color }: { data: number[], color: string }) => 
         <line x1="0" y1={height/2} x2={width} y2={height/2} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4" />
         <line x1="0" y1={height} x2={width} y2={height} stroke="#e2e8f0" strokeWidth="1" />
         <polyline fill="none" stroke={color} strokeWidth="3" points={points} />
-        {data.map((val, i) => {
-          const x = (i / (data.length - 1)) * width;
-          const y = height - (val / maxVal) * height;
-          return (
-            <g key={i}>
-              <circle cx={x} cy={y} r="4" fill="white" stroke={color} strokeWidth="2" />
-              <text x={x} y={y - 10} textAnchor="middle" fontSize="10" fill={color} fontWeight="bold">{val}</text>
-            </g>
-          );
-        })}
+        {data.map((val, i) => (
+          <g key={i}>
+            <circle cx={(i / (data.length - 1)) * width} cy={height - (val / maxVal) * height} r="4" fill="white" stroke={color} strokeWidth="2" />
+            <text x={(i / (data.length - 1)) * width} y={height - (val / maxVal) * height - 10} textAnchor="middle" fontSize="10" fill={color} fontWeight="bold">{val}</text>
+          </g>
+        ))}
       </svg>
     </div>
   );
@@ -104,6 +83,8 @@ function App() {
   const [students, setStudents] = useState<any>({});
   const [teachers, setTeachers] = useState<any>({}); 
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [debugMsg, setDebugMsg] = useState(""); 
+
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState<"student" | "parent" | "teacher">("student");
   const [inputId, setInputId] = useState("");
@@ -113,10 +94,9 @@ function App() {
   const [resetEmail, setResetEmail] = useState("");
   const [currentStudentId, setCurrentStudentId] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
-  const [currentView, setCurrentView] = useState<"calendar" | "progress" | "test" | "mock" | "homework" | "materials">("calendar");
+  const [currentView, setCurrentView] = useState<"calendar" | "progress" | "test" | "homework" | "materials">("calendar");
 
   const [isFirstLoginSetup, setIsFirstLoginSetup] = useState(false);
-  // ★ 変更：住所(address)を削除しました
   const [setupData, setSetupData] = useState({ newPass: "", parentPass: "", lastName: "", firstName: "", email: "", gender: "未回答", schoolPref: "", schoolName: "", schoolGrade: "" });
   
   const [isTeacherSetup, setIsTeacherSetup] = useState(false);
@@ -145,19 +125,47 @@ function App() {
   const [studyStartTime, setStudyStartTime] = useState<number | null>(null);
 
   // ====================================================
-  // クラウド同期 & 既読管理
+  // クラウド同期
   // ====================================================
   useEffect(() => {
-    const docRef = doc(db, "lms_system", "main_data");
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const d = docSnap.data();
-        setStudents(d.students || {});
-        setTeachers(d.teachers || {}); 
-      }
-      setIsDataLoaded(true);
-    });
-    return () => unsubscribe(); 
+    let unsubscribe: any = null;
+
+    if (!process.env.REACT_APP_FIREBASE_API_KEY) {
+      setDebugMsg("【原因】NetlifyにAPIキーが設定されていません。");
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setDebugMsg("【原因】データベース接続がタイムアウトしました。");
+    }, 8000);
+
+    signInWithEmailAndPassword(auth, "system@jespere.local", "JespereApp2026!")
+      .then(() => {
+        const docRef = doc(db, "lms_system", "main_data");
+        unsubscribe = onSnapshot(docRef, (docSnap) => {
+          clearTimeout(timeoutId); 
+          if (docSnap.exists()) {
+            const d = docSnap.data();
+            setStudents(d.students || {});
+            setTeachers(d.teachers || {}); 
+          }
+          setIsDataLoaded(true);
+        }, (error) => {
+          clearTimeout(timeoutId);
+          console.error("クラウド読み込みエラー:", error);
+          setDebugMsg(`【原因】データベースの読み込み権限がありません。\n(詳細: ${error.message})`);
+        });
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        console.error("システム認証エラー:", error);
+        setDebugMsg(`【原因】裏口キー（システムアカウント）での認証に失敗しました。\n(詳細: ${error.message})`);
+      });
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (unsubscribe) unsubscribe(); 
+    };
   }, []);
 
   const updateStudentsData = async (newStudents: any) => {
@@ -214,9 +222,7 @@ function App() {
       try {
         await setDoc(doc(db, "backups", todayStr), { data: currentData, createdAt: new Date().toISOString() });
         localStorage.setItem("lms_last_auto_backup", todayStr);
-      } catch (e) {
-        console.error("バックアップ作成失敗:", e);
-      }
+      } catch (e) {}
     }
   };
 
@@ -225,9 +231,7 @@ function App() {
   }, [students, role]);
 
   useEffect(() => {
-    onMessageListener()
-      .then((payload: any) => { alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`); })
-      .catch((err) => console.log(err));
+    onMessageListener().then((payload: any) => { alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`); }).catch(() => {});
   }, []);
 
   const generateNextId = () => {
@@ -254,17 +258,12 @@ function App() {
   }, [students, teachers, isDataLoaded]);
 
   useEffect(() => {
-    if (GRADE_CURRICULUM[newStudentGrade]) {
-      setNewStudentSubjects(Object.keys(GRADE_CURRICULUM[newStudentGrade]));
-    } else {
-      setNewStudentSubjects([]);
-    }
+    if (GRADE_CURRICULUM[newStudentGrade]) setNewStudentSubjects(Object.keys(GRADE_CURRICULUM[newStudentGrade]));
+    else setNewStudentSubjects([]);
   }, [newStudentGrade]);
 
   useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-    }
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [students, currentView, calendarSubView, currentStudentId]);
 
   useEffect(() => {
@@ -276,9 +275,6 @@ function App() {
     }
   }, [selectedDate, currentStudentId, students]);
 
-  // ====================================================
-  // 各種ハンドラ
-  // ====================================================
   const handleLogin = () => {
     if (role === "student" || role === "parent") {
       const s = students[inputId];
@@ -309,13 +305,11 @@ function App() {
   };
 
   const handleFirstLoginSetup = () => {
-    // ★ 変更：アドレスの必須チェックを解除
     const { newPass, parentPass, lastName, firstName, email, gender, schoolPref, schoolName, schoolGrade } = setupData;
     if (!newPass || !parentPass || !lastName || !firstName || !email || !schoolName) return alert("必須項目を入力してください");
     const updated = { ...students };
     const s = updated[currentStudentId!];
     s.password = newPass; s.parentPassword = parentPass; s.name = `${lastName} ${firstName}`; 
-    // ★ 変更：保存データからaddressを削除
     s.profile = { lastName, firstName, email, gender, schoolPref, schoolName, schoolGrade };
     s.isFirstLogin = false; 
     updateStudentsData(updated); 
@@ -331,12 +325,15 @@ function App() {
     const newStudent = { name, password: pass, parentPassword: "p" + pass, grade: newStudentGrade, subjects: selectedSubjectsData, isFirstLogin: true, tests: [], records: [], homeworks: [], materials: [], messages: [], parentMessages: [], reports: [], studySessions: [], lastRead: {} };
     updateStudentsData({ ...students, [newStudentId]: newStudent }); 
     alert(`ID: ${newStudentId} 登録完了`);
+    (document.getElementById("nName") as HTMLInputElement).value = ""; 
+    (document.getElementById("nPass") as HTMLInputElement).value = ""; 
   };
 
   const createTeacher = () => {
     if (!newTeacherName || !newTeacherPass) return alert("入力不足です");
     updateTeachersData({ ...teachers, [newTeacherId]: { name: newTeacherName, password: newTeacherPass, isFirstLogin: true, role: "teacher" } });
     alert(`講師ID: ${newTeacherId} 登録しました`);
+    setNewTeacherName(""); setNewTeacherPass("");
   };
 
   const handleTeacherSetup = () => {
@@ -371,7 +368,6 @@ function App() {
     return currentStudent.studySessions.filter((s:any) => s.date === today).reduce((acc:number, curr:any) => acc + curr.minutes, 0);
   };
 
-  // ★ バッジ判定ロジック
   const hasUnread = (type: "chat" | "parentChat" | "report") => {
     if (!currentStudent || role === "teacher") return false;
     const lastRead = currentStudent.lastRead?.[type] || 0;
@@ -417,34 +413,25 @@ function App() {
     updateStudentsData(updated); setMatTitle(""); setMatUrl("");
   };
 
-  const handleNotificationSetup = async () => {
-    const token = await requestForToken();
-    if (token) {
-      alert("通知設定完了: " + token.slice(0, 10) + "...");
-    } else {
-      alert("通知の許可が得られませんでした。");
-    }
-  };
-
-  const handleResetPassword = () => {
-    const s = students[resetId];
-    if (s && s.profile && s.profile.email === resetEmail) {
-      alert(`【メール送信完了】\n${resetEmail} 宛にパスワードリセットメールを送信しました。\n\n(※開発用表示: 生徒PW「${s.password}」 / 保護者PW「${s.parentPassword}」)`);
-      setIsForgotPassword(false); setResetId(""); setResetEmail("");
-    } else alert("IDとメールアドレスが一致するユーザーが見つかりません。");
-  };
-
+  // ★ 修正：確実にReactが更新を検知するようにディープコピーで科目変更
   const toggleSubject = (subjName: string) => {
     if (!currentStudentId) return;
     const updated = { ...students };
-    const s = updated[currentStudentId];
-    if (s.subjects[subjName]) {
-      if (window.confirm(`${subjName} を削除しますか？`)) delete s.subjects[subjName];
+    // ディープコピーを作成して状態を更新
+    const studentToUpdate = { ...updated[currentStudentId] };
+    studentToUpdate.subjects = { ...studentToUpdate.subjects };
+
+    if (studentToUpdate.subjects[subjName]) {
+      if (window.confirm(`${subjName} を削除しますか？`)) {
+        delete studentToUpdate.subjects[subjName];
+      }
     } else {
-      const grade = s.grade || "中1"; 
+      const grade = studentToUpdate.grade || "中1"; 
       const curriculum = GRADE_CURRICULUM[grade]?.[subjName];
-      s.subjects[subjName] = curriculum ? JSON.parse(JSON.stringify(curriculum)) : [{ unit: "自由学習", progress: 0 }];
+      studentToUpdate.subjects[subjName] = curriculum ? JSON.parse(JSON.stringify(curriculum)) : [{ unit: "自由学習", progress: 0 }];
     }
+    
+    updated[currentStudentId] = studentToUpdate;
     updateStudentsData(updated); 
   };
 
@@ -494,7 +481,23 @@ function App() {
     updateStudentsData(updated); 
   };
 
-  if (!isDataLoaded) return <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] text-slate-400 font-bold">Loading Database...</div>;
+  if (!isDataLoaded) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#F8FAFC] text-slate-800 p-10 font-bold text-center">
+        {!debugMsg ? (
+          <>
+            <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+            <p className="text-slate-400">Loading Secure Database...</p>
+          </>
+        ) : (
+          <div className="bg-rose-100 border-2 border-rose-300 text-rose-700 p-6 rounded-2xl max-w-lg shadow-lg">
+            <h3 className="text-lg font-black mb-4">🚨 接続エラーが発生しました</h3>
+            <p className="text-sm whitespace-pre-wrap text-left leading-relaxed">{debugMsg}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const currentStudent = currentStudentId ? students[currentStudentId] : null;
   const isHomeworkOverdue = checkHomeworkDeadline();
@@ -502,14 +505,12 @@ function App() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans pb-20">
       
-      {/* 宿題忘れアラート */}
       {loggedIn && role !== "teacher" && isHomeworkOverdue && (
         <div className="bg-rose-500 text-white p-3 text-center text-xs font-black animate-bounce">
           ⚠️ 授業から5日が経過しています。宿題を提出しましょう！
         </div>
       )}
 
-      {/* 初回設定モーダル */}
       {isFirstLoginSetup && (
         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white p-8 md:p-10 rounded-[2.5rem] w-full max-w-lg shadow-2xl">
@@ -562,13 +563,18 @@ function App() {
              <div className="space-y-4">
                <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" placeholder="ID (例: 260001)" value={resetId} onChange={e => setResetId(e.target.value)} />
                <input className="w-full bg-slate-100 p-4 rounded-xl font-bold" type="email" placeholder="メールアドレス" value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
-               <button onClick={handleResetPassword} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black">メールを送信</button>
+               <button onClick={() => {
+                 const s = students[resetId];
+                 if (s && s.profile && s.profile.email === resetEmail) {
+                   alert(`【メール送信完了】\n${resetEmail} 宛にパスワードリセットメールを送信しました。\n\n(※開発用表示: 生徒PW「${s.password}」 / 保護者PW「${s.parentPassword}」)`);
+                   setIsForgotPassword(false); setResetId(""); setResetEmail("");
+                 } else alert("IDとメールアドレスが一致するユーザーが見つかりません。");
+               }} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black">メールを送信</button>
              </div>
            </div>
         </div>
       )}
 
-      {/* ログイン画面 */}
       {!loggedIn ? (
         <div className={`fixed inset-0 flex items-center justify-center ${role === "student" ? "bg-blue-50" : role === "parent" ? "bg-emerald-50" : "bg-rose-50"}`}>
           <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-sm">
@@ -592,7 +598,6 @@ function App() {
           </header>
 
           <div className="grid lg:grid-cols-12 gap-8">
-            {/* 左カラム */}
             <div className="lg:col-span-4 space-y-6">
               {role === "teacher" ? (
                 <>
@@ -603,10 +608,12 @@ function App() {
                   {adminTab === "students" ? (
                     <div className="space-y-2 max-h-[600px] overflow-y-auto custom-scroll">
                       {Object.entries(students).map(([id, s]: any) => (
-                        <button key={id} onClick={() => { setCurrentStudentId(id); setSubject(Object.keys(s.subjects)[0] || ""); }} className={`w-full text-left p-5 rounded-[1.8rem] border transition-all ${currentStudentId === id ? "bg-white border-rose-400 shadow-xl ring-4 ring-rose-50" : "bg-white opacity-70"}`}>
+                        <button key={id} onClick={() => { setCurrentStudentId(id); setSubject(Object.keys(s.subjects)[0] || ""); setIsEditingSubjects(false); }} className={`w-full text-left p-5 rounded-[1.8rem] border transition-all ${currentStudentId === id ? "bg-white border-rose-400 shadow-xl ring-4 ring-rose-50" : "bg-white opacity-70 hover:opacity-100"}`}>
                           <p className="text-[10px] font-black text-slate-300">#{id}</p><p className="font-black text-slate-800 text-lg">{s.name}</p>
                         </button>
                       ))}
+                      
+                      {/* ★ 修正：新規生徒登録の科目チェックボックスを復元 */}
                       <div className="p-6 bg-slate-800 rounded-[2rem] text-white mt-4">
                          <h4 className="text-xs font-black mb-4">＋ 新規生徒登録</h4>
                          <input id="nName" placeholder="生徒名" className="w-full p-3 mb-2 bg-slate-700 rounded-xl text-sm outline-none" />
@@ -614,7 +621,20 @@ function App() {
                          <select value={newStudentGrade} onChange={(e) => setNewStudentGrade(e.target.value)} className="w-full p-3 bg-slate-700 rounded-xl text-sm font-black outline-none mb-4">
                             {Object.keys(GRADE_CURRICULUM).map(g => <option key={g} value={g}>{g}</option>)}
                          </select>
-                         <button onClick={createStudent} className="w-full py-3 bg-rose-500 rounded-xl font-black text-xs">生徒を作成</button>
+                         
+                         <div className="bg-slate-700 p-4 rounded-xl mb-4">
+                            <p className="text-[10px] font-bold text-slate-300 mb-2">受講科目を選択</p>
+                            <div className="grid grid-cols-2 gap-2 max-h-[100px] overflow-y-auto custom-scroll">
+                              {GRADE_CURRICULUM[newStudentGrade] && Object.keys(GRADE_CURRICULUM[newStudentGrade]).map(subj => (
+                                <label key={subj} className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                                  <input type="checkbox" checked={newStudentSubjects.includes(subj)} onChange={e => { e.target.checked ? setNewStudentSubjects([...newStudentSubjects, subj]) : setNewStudentSubjects(newStudentSubjects.filter(s => s !== subj)); }} />
+                                  {subj}
+                                </label>
+                              ))}
+                            </div>
+                         </div>
+
+                         <button onClick={createStudent} className="w-full py-3 bg-rose-500 rounded-xl font-black text-xs hover:bg-rose-400">生徒を作成</button>
                       </div>
                     </div>
                   ) : (
@@ -625,7 +645,7 @@ function App() {
                       <div className="p-6 bg-indigo-900 rounded-[2rem] text-white">
                          <input placeholder="講師名" value={newTeacherName} onChange={e => setNewTeacherName(e.target.value)} className="w-full p-3 mb-2 bg-indigo-800 rounded-xl text-sm outline-none" />
                          <input placeholder="初期PW" value={newTeacherPass} onChange={e => setNewTeacherPass(e.target.value)} className="w-full p-3 mb-4 bg-indigo-800 rounded-xl text-sm outline-none" />
-                         <button onClick={createTeacher} className="w-full py-3 bg-indigo-500 rounded-xl font-black text-xs">講師を登録</button>
+                         <button onClick={createTeacher} className="w-full py-3 bg-indigo-500 rounded-xl font-black text-xs hover:bg-indigo-400">講師を登録</button>
                       </div>
                     </div>
                   )}
@@ -636,10 +656,10 @@ function App() {
                   <h2 className="text-3xl font-black mt-4 mb-2">{currentStudent!.name} {role === "parent" && "様"}</h2>
                   <div className="bg-white/10 p-4 rounded-xl mb-6 text-center">
                     <p className="text-xs font-bold text-white/80 mb-2">本日の学習: <span className="text-xl text-white">{getTodayStudyTime()}</span> 分</p>
-                    {role === "student" && (!studyStartTime ? <button onClick={startStudy} className="w-full py-3 bg-emerald-500 rounded-xl font-black text-xs">▶️ 勉強スタート</button> : <button onClick={() => { if(window.confirm("学習を終了して記録しますか？")) endStudy(); }} className="w-full py-3 bg-rose-500 rounded-xl font-black text-xs animate-pulse">⏹️ 勉強おわり</button>)}
+                    {role === "student" && (!studyStartTime ? <button onClick={startStudy} className="w-full py-3 bg-emerald-500 rounded-xl font-black text-xs hover:bg-emerald-400">▶️ 勉強スタート</button> : <button onClick={() => { if(window.confirm("学習を終了して記録しますか？")) endStudy(); }} className="w-full py-3 bg-rose-500 rounded-xl font-black text-xs animate-pulse">⏹️ 勉強おわり</button>)}
                   </div>
                   {currentStudent.meetingUrl && <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="block w-full py-4 bg-white/20 hover:bg-white/30 text-white rounded-2xl font-black text-center text-xs mb-4">🎥 授業URLを開く</a>}
-                  {role === "student" && <label className="flex items-center justify-center gap-2 w-full py-4 bg-white text-blue-600 rounded-2xl font-black text-xs cursor-pointer">📸 宿題を提出<input type="file" accept="image/*" className="hidden" onChange={handleHomeworkUpload} /></label>}
+                  {role === "student" && <label className="flex items-center justify-center gap-2 w-full py-4 bg-white text-blue-600 rounded-2xl font-black text-xs cursor-pointer hover:bg-blue-50">📸 宿題を提出<input type="file" accept="image/*" className="hidden" onChange={handleHomeworkUpload} /></label>}
                   {isHomeworkOverdue && <div className="mt-4 p-3 bg-rose-600/50 rounded-xl text-[10px] font-bold border border-rose-400">🚨 宿題の提出期限（5日）を過ぎています</div>}
                 </div>
               )}
@@ -650,9 +670,51 @@ function App() {
               {currentStudent ? (
                 <div className="bg-white p-6 md:p-10 rounded-[3rem] shadow-sm min-h-[600px] border border-slate-100 flex flex-col">
                   
-                  <div className="flex flex-wrap gap-2 mb-8 bg-slate-100 p-1.5 rounded-2xl w-fit relative">
+                  {role === "teacher" && (
+                    <div className="mb-8">
+                      <div className="p-6 bg-slate-800 rounded-[2rem] text-white shadow-lg mb-4">
+                        <div className="flex flex-col md:flex-row gap-4 items-end">
+                           <div className="flex-1 w-full">
+                              <label className="text-[10px] font-bold text-slate-400 mb-2 block uppercase tracking-wider">オンライン授業 URL</label>
+                              <div className="flex items-center gap-2 bg-slate-700 p-2 rounded-xl border border-slate-600">
+                                <span className="text-xl pl-2">🔗</span>
+                                <input type="text" value={currentStudent.meetingUrl || ""} onChange={(e) => {const u = {...students}; u[currentStudentId!].meetingUrl = e.target.value; updateStudentsData(u)}} placeholder="https://zoom.us/..." className="w-full bg-transparent border-none outline-none text-sm font-bold text-white" />
+                              </div>
+                           </div>
+                           {currentStudent.meetingUrl && <a href={currentStudent.meetingUrl} target="_blank" rel="noreferrer" className="px-6 py-4 bg-rose-500 text-white rounded-xl font-black text-xs hover:bg-rose-400">入室</a>}
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-start bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                        <div className="text-xs font-bold text-slate-600 space-y-1">
+                          <p><span className="text-slate-400">氏名:</span> {currentStudent.profile?.lastName} {currentStudent.profile?.firstName} ({currentStudent.profile?.gender})</p>
+                          <p><span className="text-slate-400">Email:</span> {currentStudent.profile?.email || "未登録"}</p>
+                          <p><span className="text-slate-400">学校:</span> {currentStudent.profile?.schoolPref} {currentStudent.profile?.schoolName} ({currentStudent.profile?.schoolGrade})</p>
+                          <p className="mt-2 text-blue-600 font-black">▶ 本日の自習時間: {getTodayStudyTime()} 分</p>
+                        </div>
+                        <button onClick={() => setIsEditingSubjects(!isEditingSubjects)} className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-black text-slate-500 hover:bg-slate-100">
+                          {isEditingSubjects ? "編集を終了" : "科目を設定変更"}
+                        </button>
+                      </div>
+                      
+                      {/* ★ 修正：科目変更UIの即時反映バグを修正 */}
+                      {isEditingSubjects && (
+                        <div className="mt-4 p-6 bg-yellow-50 rounded-2xl border border-yellow-200 animate-in fade-in">
+                          <h4 className="font-black text-yellow-600 mb-4">履修科目の変更</h4>
+                          <div className="flex flex-wrap gap-3">
+                            {GRADE_CURRICULUM[currentStudent.grade] && Object.keys(GRADE_CURRICULUM[currentStudent.grade]).map(subj => (
+                              <button key={subj} onClick={() => toggleSubject(subj)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${currentStudent.subjects[subj] ? "bg-blue-600 text-white shadow-md" : "bg-white text-slate-400 border border-slate-200 hover:bg-slate-50"}`}>
+                                {currentStudent.subjects[subj] ? "✅ " : "+ "} {subj}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 mb-8 bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 relative">
                     {[{ k: "calendar", l: "📅 CALENDAR & CHAT" }, { k: "progress", l: "📊 PROGRESS" }, { k: "test", l: "📝 TESTS" }, { k: "homework", l: "🏠 HOMEWORK" }, { k: "materials", l: "📚 MATERIALS" }].map((tab) => (
-                      <button key={tab.k} onClick={() => setCurrentView(tab.k as any)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all relative ${currentView === tab.k ? "bg-white text-slate-800 shadow-sm" : "text-slate-400"}`}>
+                      <button key={tab.k} onClick={() => setCurrentView(tab.k as any)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black transition-all relative ${currentView === tab.k ? "bg-white text-slate-800 shadow-sm" : "text-slate-400 hover:text-slate-600"}`}>
                         {tab.l}
                         {tab.k === "calendar" && (hasUnread("chat") || hasUnread("parentChat") || hasUnread("report")) && <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full border-2 border-white"></span>}
                       </button>
@@ -662,24 +724,23 @@ function App() {
                   {currentView === "calendar" && (
                     <div className="grid md:grid-cols-2 gap-10 flex-1 overflow-hidden">
                       <div className="shrink-0">
-                        <div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl">{viewDate.getFullYear()}.{viewDate.getMonth()+1}</h3><div className="flex gap-2"><button onClick={()=>setViewDate(new Date(viewDate.setMonth(viewDate.getMonth()-1)))} className="p-2 bg-slate-50 rounded-lg text-xs">◀</button><button onClick={()=>setViewDate(new Date(viewDate.setMonth(viewDate.getMonth()+1)))} className="p-2 bg-slate-50 rounded-lg text-xs">▶</button></div></div>
+                        <div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl">{viewDate.getFullYear()}.{viewDate.getMonth()+1}</h3><div className="flex gap-2"><button onClick={()=>setViewDate(new Date(viewDate.setMonth(viewDate.getMonth()-1)))} className="p-2 bg-slate-50 rounded-lg text-xs hover:bg-slate-100">◀</button><button onClick={()=>setViewDate(new Date(viewDate.setMonth(viewDate.getMonth()+1)))} className="p-2 bg-slate-50 rounded-lg text-xs hover:bg-slate-100">▶</button></div></div>
                         <div className="grid grid-cols-7 gap-2">
                           {getCalendarDays().map((date, i) => {
                              const hasReport = date && currentStudent.reports?.some((r: any) => r.date === date);
-                             return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasReport && <span className="w-1.5 h-1.5 rounded-full absolute bottom-2 bg-rose-400" />}</button>;
+                             return <button key={i} disabled={!date} onClick={() => date && setSelectedDate(date)} className={`aspect-square rounded-2xl text-xs font-bold relative ${selectedDate === date ? "bg-slate-800 text-white shadow-lg" : "bg-slate-50 text-slate-600 hover:bg-slate-100"} ${!date && "invisible"}`}>{date ? date.split("/")[2] : ""}{hasReport && <span className="w-1.5 h-1.5 rounded-full absolute bottom-2 bg-rose-400" />}</button>;
                           })}
                         </div>
                       </div>
                       <div className="flex flex-col h-[500px] border border-slate-100 rounded-[2rem] overflow-hidden bg-slate-50">
                         <div className="flex bg-white border-b p-2 font-black text-[10px]">
-                          {role !== "parent" && <button onClick={()=>setCalendarSubView("chat")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "chat" ? "bg-slate-800 text-white" : "text-slate-400"}`}>💬 生徒連絡 {hasUnread("chat") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>}
-                          {role !== "student" && <button onClick={()=>setCalendarSubView("parentChat")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "parentChat" ? "bg-slate-800 text-white" : "text-slate-400"}`}>👪 保護者連絡 {hasUnread("parentChat") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>}
-                          <button onClick={()=>setCalendarSubView("report")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "report" ? "bg-slate-800 text-white" : "text-slate-400"}`}>📝 報告 {hasUnread("report") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>
+                          {role !== "parent" && <button onClick={()=>setCalendarSubView("chat")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "chat" ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-slate-50"}`}>💬 生徒連絡 {hasUnread("chat") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>}
+                          {role !== "student" && <button onClick={()=>setCalendarSubView("parentChat")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "parentChat" ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-slate-50"}`}>👪 保護者連絡 {hasUnread("parentChat") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>}
+                          <button onClick={()=>setCalendarSubView("report")} className={`flex-1 py-3 rounded-xl relative ${calendarSubView === "report" ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-slate-50"}`}>📝 報告 {hasUnread("report") && <span className="inline-block w-2 h-2 bg-rose-500 rounded-full ml-1"></span>}</button>
                         </div>
                         {calendarSubView !== "report" ? (
                           <div className="flex flex-col flex-1 overflow-hidden">
                             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scroll" ref={chatScrollRef}>
-                              {/* ★ バグ修正：未定義(undefined)の配列に対するmapエラーを回避 */}
                               {(calendarSubView === "parentChat" ? (currentStudent.parentMessages || []) : (currentStudent.messages || [])).length === 0 ? (
                                 <p className="text-center text-slate-400 text-xs font-bold mt-10">メッセージはまだありません</p>
                               ) : (
@@ -691,15 +752,15 @@ function App() {
                                 ))
                               )}
                             </div>
-                            <div className="p-4 bg-white border-t flex gap-2"><input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="メッセージ..." className="flex-1 bg-slate-100 p-3 rounded-xl text-sm font-bold outline-none" /><button onClick={sendMessage} className="px-5 bg-blue-600 text-white rounded-xl font-black text-xs">送信</button></div>
+                            <div className="p-4 bg-white border-t flex gap-2"><input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage()} placeholder="メッセージ..." className="flex-1 bg-slate-100 p-3 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100" /><button onClick={sendMessage} className="px-5 bg-blue-600 text-white rounded-xl font-black text-xs hover:bg-blue-700">送信</button></div>
                           </div>
                         ) : (
                           <div className="p-6 overflow-y-auto custom-scroll flex-1">
                             <div className="bg-slate-800 text-white px-3 py-1 rounded-lg text-[10px] font-black inline-block mb-4">{selectedDate} の報告</div>
                             {role === "teacher" ? (
                               <div className="space-y-4">
-                                <textarea value={publicReport} onChange={e=>setPublicReport(e.target.value)} placeholder="【公開】授業内容・宿題内容など" className="w-full h-24 p-3 rounded-xl border-2 text-sm outline-none" />
-                                <textarea value={internalReport} onChange={e=>setInternalReport(e.target.value)} placeholder="【非公開】内部メモ" className="w-full h-24 p-3 rounded-xl bg-rose-50 border-rose-100 border-2 text-sm outline-none" />
+                                <textarea value={publicReport} onChange={e=>setPublicReport(e.target.value)} placeholder="【公開】授業内容・宿題内容など" className="w-full h-24 p-3 rounded-xl border-2 text-sm outline-none focus:border-emerald-400" />
+                                <textarea value={internalReport} onChange={e=>setInternalReport(e.target.value)} placeholder="【非公開】内部メモ" className="w-full h-24 p-3 rounded-xl bg-rose-50 border-rose-100 border-2 text-sm outline-none focus:border-rose-400" />
                                 <button onClick={() => {
                                   const updated = {...students};
                                   if(!updated[currentStudentId!].reports) updated[currentStudentId!].reports = [];
@@ -707,7 +768,7 @@ function App() {
                                   if(idx>=0) { updated[currentStudentId!].reports[idx].public = publicReport; updated[currentStudentId!].reports[idx].internal = internalReport; }
                                   else updated[currentStudentId!].reports.push({date: selectedDate, public: publicReport, internal: internalReport});
                                   updateStudentsData(updated); alert("保存完了");
-                                }} className="w-full py-3 bg-slate-800 text-white rounded-xl font-black text-xs">保存する</button>
+                                }} className="w-full py-3 bg-slate-800 text-white rounded-xl font-black text-xs hover:bg-slate-700">保存する</button>
                               </div>
                             ) : <div className="p-5 bg-white rounded-2xl border min-h-[200px] text-sm font-bold text-slate-700 whitespace-pre-wrap">{publicReport || "未入力です。"}</div>}
                           </div>
@@ -738,7 +799,7 @@ function App() {
                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-in fade-in">
                        {currentStudent.homeworks?.map((h: any, i: number) => (
                          <div key={i} className="aspect-square bg-slate-100 rounded-2xl overflow-hidden cursor-zoom-in" onClick={() => setPreviewImg(h.img)}>
-                           <img src={h.img} className="w-full h-full object-cover" />
+                           <img src={h.img} className="w-full h-full object-cover hover:scale-110 transition-transform duration-300" />
                            <div className="absolute bottom-0 left-0 right-0 bg-black/40 p-2 text-[8px] text-white font-bold">{h.date}</div>
                          </div>
                        ))}
@@ -756,14 +817,13 @@ function App() {
                     </div>
                   )}
 
-                  {/* 教材（Materials）機能 */}
                   {currentView === "materials" && (
                     <div className="space-y-6 animate-in fade-in">
                       {role === "teacher" && (
                         <div className="p-6 rounded-2xl flex gap-2 bg-indigo-50">
                           <input placeholder="教材タイトル" className="flex-1 p-3 rounded-xl border-none text-sm outline-none" value={matTitle} onChange={(e) => setMatTitle(e.target.value)} />
                           <input placeholder="URL" className="flex-1 p-3 rounded-xl border-none text-sm outline-none" value={matUrl} onChange={(e) => setMatUrl(e.target.value)} />
-                          <button onClick={addMaterial} className="px-6 text-white rounded-xl font-black text-xs bg-indigo-600">追加</button>
+                          <button onClick={addMaterial} className="px-6 text-white rounded-xl font-black text-xs bg-indigo-600 hover:bg-indigo-700">追加</button>
                         </div>
                       )}
                       <div className="grid gap-3">
@@ -781,13 +841,13 @@ function App() {
                   )}
 
                 </div>
-              ) : <div className="h-full flex items-center justify-center text-slate-300 border-4 border-dashed rounded-[3rem] min-h-[600px]">SELECT STUDENT</div>}
+              ) : <div className="h-full flex items-center justify-center text-slate-300 border-4 border-dashed rounded-[3rem] min-h-[600px] font-bold">SELECT STUDENT</div>}
             </div>
           </div>
         </div>
       )}
 
-      {previewImg && <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-8 cursor-zoom-out" onClick={() => setPreviewImg(null)}><img src={previewImg} className="max-w-full max-h-full rounded-lg" /></div>}
+      {previewImg && <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-8 cursor-zoom-out" onClick={() => setPreviewImg(null)}><img src={previewImg} className="max-w-full max-h-full rounded-lg shadow-2xl" /></div>}
       <style>{`.no-scrollbar::-webkit-scrollbar { display: none; } .custom-scroll::-webkit-scrollbar { width: 4px; } .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }`}</style>
     </div>
   );
